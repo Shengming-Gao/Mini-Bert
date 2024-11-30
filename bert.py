@@ -129,7 +129,7 @@ class BertLayer(nn.Module):
     attention_output = self.add_norm(hidden_states, attention_output, self.attention_dense, self.attention_dropout, self.attention_layer_norm)
 
     intermediate_output = self.interm_af(self.interm_dense(attention_output))
-    layer_output = self.out_dense(intermediate_output)
+    # layer_output = self.out_dense(intermediate_output)
     layer_output = self.add_norm(attention_output, intermediate_output, self.out_dense, self.out_dropout, self.out_layer_norm)
 
     return layer_output
