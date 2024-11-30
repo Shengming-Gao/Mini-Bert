@@ -107,12 +107,10 @@ class BertLayer(nn.Module):
     """
     # Hint: Remember that BERT applies to the output of each sub-layer, before it is added to the sub-layer input and normalized 
     ### TODO
-
-    transformed = dropout(output)
+    transformed = dropout(dense_layer(output))
     output = input + transformed
     output = ln_layer(output)
     return output
-
 
 
   def forward(self, hidden_states, attention_mask):
@@ -126,23 +124,13 @@ class BertLayer(nn.Module):
     4. a add-norm that takes the input and output of the feed forward layer
     """
     ### TODO
-    # Multi-head self-attention
-    attention_output = self.self_attention(hidden_states, attention_mask)
-    # Apply linear layer after attention
-    attention_output = self.attention_dense(attention_output)
-    # Apply dropout after attention
-    attention_output = self.attention_dropout(attention_output)
-    # Apply add-norm after attention
-    attention_output = self.add_norm(hidden_states, attention_output,self.out_dense, self.attention_dropout, self.attention_layer_norm)
 
-    # Feed-forward network
+    attention_output = self.self_attention(hidden_states, attention_mask)
+    attention_output = self.add_norm(hidden_states, attention_output, self.attention_dense, self.attention_dropout, self.attention_layer_norm)
+
     intermediate_output = self.interm_af(self.interm_dense(attention_output))
-    # Apply the output dense layer
     layer_output = self.out_dense(intermediate_output)
-    # Apply dropout after feed-forward
-    layer_output = self.out_dropout(layer_output)
-    # Apply add-norm after feed-forward
-    layer_output = self.add_norm(attention_output, layer_output, self.out_dense, self.out_dropout, self.out_layer_norm)
+    layer_output = self.add_norm(attention_output, intermediate_output, self.out_dense, self.out_dropout, self.out_layer_norm)
 
     return layer_output
 
