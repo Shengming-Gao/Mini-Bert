@@ -269,7 +269,6 @@ def save_model(model, optimizer, args, config, filepath):
     #
     #     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
 
-
 def train_multitask(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -283,7 +282,6 @@ def train_multitask(args):
     sst_train_dataset = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_dataset = SentenceClassificationDataset(sst_dev_data, args)
 
-    # **Modify Here: Replace 'task' with 'isRegression'**
     para_train_dataset = SentencePairDataset(para_train_data, args, isRegression=False)  # Paraphrase Detection
     para_dev_dataset = SentencePairDataset(para_dev_data, args, isRegression=False)
 
@@ -418,14 +416,14 @@ def train_multitask(args):
         model.eval()
         with torch.no_grad():
             # Sentiment Evaluation
-            train_acc_sst, train_f1_sst, _ = model_eval_sst(sst_train_dataloader, model, device)
-            dev_acc_sst, dev_f1_sst, _ = model_eval_sst(sst_dev_dataloader, model, device)
+            train_acc_sst, train_f1_sst, *rest_train = model_eval_sst(sst_train_dataloader, model, device)
+            dev_acc_sst, dev_f1_sst, *rest_dev = model_eval_sst(sst_dev_dataloader, model, device)
 
             # Paraphrase Evaluation
-            dev_acc_para, dev_f1_para, _ = model_eval_paraphrase(para_dev_dataloader, model, device)
+            dev_acc_para, dev_f1_para, *rest_para = model_eval_paraphrase(para_dev_dataloader, model, device)
 
             # STS Evaluation
-            dev_corr_sts, dev_mse_sts, _ = model_eval_sts(sts_dev_dataloader, model, device)
+            dev_corr_sts, dev_mse_sts, *rest_sts = model_eval_sts(sts_dev_dataloader, model, device)
 
         # Determine overall performance (you can adjust the metric as needed)
         overall_dev_acc = (dev_acc_sst + dev_acc_para) / 2  # Example: average accuracy
