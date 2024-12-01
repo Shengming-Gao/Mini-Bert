@@ -32,10 +32,9 @@ def seed_everything(seed=11711):
 BERT_HIDDEN_SIZE = 768
 N_SENTIMENT_CLASSES = 5
 
-
 class MultitaskBERT(nn.Module):
     '''
-    This module should use BERT for 3 tasks:
+    This module uses BERT for 3 tasks:
 
     - Sentiment classification (predict_sentiment)
     - Paraphrase detection (predict_paraphrase)
@@ -43,37 +42,54 @@ class MultitaskBERT(nn.Module):
     '''
     def __init__(self, config):
         super(MultitaskBERT, self).__init__()
-        # You will want to add layers here to perform the downstream tasks.
-        # Pretrain mode does not require updating bert paramters.
+        # Load pre-trained BERT model
         self.bert = BertModel.from_pretrained('bert-base-uncased')
+
+        # Freeze or unfreeze BERT parameters based on training option
         for param in self.bert.parameters():
             if config.option == 'pretrain':
                 param.requires_grad = False
             elif config.option == 'finetune':
                 param.requires_grad = True
-        ### TODO
-        raise NotImplementedError
 
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        # Sentiment classification layer
+        self.sentiment_classifier = nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
+
+        # Paraphrase detection layer
+        self.paraphrase_classifier = nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
+
+        # Semantic similarity layer
+        self.similarity_regressor = nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
+
+        # Initialize weights
+        # nn.init.xavier_uniform_(self.sentiment_classifier.weight)
+        # nn.init.zeros_(self.sentiment_classifier.bias)
+        # nn.init.xavier_uniform_(self.paraphrase_classifier.weight)
+        # nn.init.zeros_(self.paraphrase_classifier.bias)
+        # nn.init.xavier_uniform_(self.similarity_regressor.weight)
+        # nn.init.zeros_(self.similarity_regressor.bias)
 
     def forward(self, input_ids, attention_mask):
         'Takes a batch of sentences and produces embeddings for them.'
-        # The final BERT embedding is the hidden state of [CLS] token (the first token)
-        # Here, you can start by just returning the embeddings straight from BERT.
-        # When thinking of improvements, you can later try modifying this
-        # (e.g., by adding other layers).
-        ### TODO
-        raise NotImplementedError
-
+        # Get the pooled output from BERT (hidden state of [CLS] token)
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs['pooler_output'] # (batch_size, hidden_size)
+        pooled_output = self.dropout(pooled_output)
+        return pooled_output
 
     def predict_sentiment(self, input_ids, attention_mask):
         '''Given a batch of sentences, outputs logits for classifying sentiment.
         There are 5 sentiment classes:
-        (0 - negative, 1- somewhat negative, 2- neutral, 3- somewhat positive, 4- positive)
+        (0 - negative, 1 - somewhat negative, 2 - neutral, 3 - somewhat positive, 4 - positive)
         Thus, your output should contain 5 logits for each sentence.
         '''
-        ### TODO
-        raise NotImplementedError
-
+        # Get sentence embeddings
+        pooled_output = self.forward(input_ids, attention_mask)
+        # Classify sentiment
+        logits = self.sentiment_classifier(pooled_output)  # (batch_size, N_SENTIMENT_CLASSES)
+        return logits
 
     def predict_paraphrase(self,
                            input_ids_1, attention_mask_1,
@@ -82,9 +98,15 @@ class MultitaskBERT(nn.Module):
         Note that your output should be unnormalized (a logit); it will be passed to the sigmoid function
         during evaluation, and handled as a logit by the appropriate loss function.
         '''
-        ### TODO
-        raise NotImplementedError
-
+        # Get embeddings for both sentences
+        pooled_output_1 = self.forward(input_ids_1, attention_mask_1)
+        pooled_output_2 = self.forward(input_ids_2, attention_mask_2)
+        # Concatenate embeddings
+        combined_output = torch.cat((pooled_output_1, pooled_output_2), dim=1)
+        combined_output = self.dropout(combined_output)
+        # Predict paraphrase logit
+        logits = self.paraphrase_classifier(combined_output).squeeze(-1)  # (batch_size)
+        return logits
 
     def predict_similarity(self,
                            input_ids_1, attention_mask_1,
@@ -92,10 +114,78 @@ class MultitaskBERT(nn.Module):
         '''Given a batch of pairs of sentences, outputs a single logit corresponding to how similar they are.
         Note that your output should be unnormalized (a logit).
         '''
-        ### TODO
-        raise NotImplementedError
+        # Get embeddings for both sentences
+        pooled_output_1 = self.forward(input_ids_1, attention_mask_1)
+        pooled_output_2 = self.forward(input_ids_2, attention_mask_2)
+        # Concatenate embeddings
+        combined_output = torch.cat((pooled_output_1, pooled_output_2), dim=1)
+        combined_output = self.dropout(combined_output)
+        # Predict similarity logit
+        logits = self.similarity_regressor(combined_output).squeeze(-1)  # (batch_size)
+        return logits
 
 
+# class MultitaskBERT(nn.Module):
+#     '''
+#     This module should use BERT for 3 tasks:
+#
+#     - Sentiment classification (predict_sentiment)
+#     - Paraphrase detection (predict_paraphrase)
+#     - Semantic Textual Similarity (predict_similarity)
+#     '''
+#     def __init__(self, config):
+#         super(MultitaskBERT, self).__init__()
+#         # You will want to add layers here to perform the downstream tasks.
+#         # Pretrain mode does not require updating bert paramters.
+#         self.bert = BertModel.from_pretrained('bert-base-uncased')
+#         for param in self.bert.parameters():
+#             if config.option == 'pretrain':
+#                 param.requires_grad = False
+#             elif config.option == 'finetune':
+#                 param.requires_grad = True
+#         ### TODO
+#         raise NotImplementedError
+#
+#
+#     def forward(self, input_ids, attention_mask):
+#         'Takes a batch of sentences and produces embeddings for them.'
+#         # The final BERT embedding is the hidden state of [CLS] token (the first token)
+#         # Here, you can start by just returning the embeddings straight from BERT.
+#         # When thinking of improvements, you can later try modifying this
+#         # (e.g., by adding other layers).
+#         ### TODO
+#         raise NotImplementedError
+#
+#
+#     def predict_sentiment(self, input_ids, attention_mask):
+#         '''Given a batch of sentences, outputs logits for classifying sentiment.
+#         There are 5 sentiment classes:
+#         (0 - negative, 1- somewhat negative, 2- neutral, 3- somewhat positive, 4- positive)
+#         Thus, your output should contain 5 logits for each sentence.
+#         '''
+#         ### TODO
+#         raise NotImplementedError
+#
+#
+#     def predict_paraphrase(self,
+#                            input_ids_1, attention_mask_1,
+#                            input_ids_2, attention_mask_2):
+#         '''Given a batch of pairs of sentences, outputs a single logit for predicting whether they are paraphrases.
+#         Note that your output should be unnormalized (a logit); it will be passed to the sigmoid function
+#         during evaluation, and handled as a logit by the appropriate loss function.
+#         '''
+#         ### TODO
+#         raise NotImplementedError
+#
+#
+#     def predict_similarity(self,
+#                            input_ids_1, attention_mask_1,
+#                            input_ids_2, attention_mask_2):
+#         '''Given a batch of pairs of sentences, outputs a single logit corresponding to how similar they are.
+#         Note that your output should be unnormalized (a logit).
+#         '''
+#         ### TODO
+#         raise NotImplementedError
 
 
 def save_model(model, optimizer, args, config, filepath):
@@ -240,3 +330,5 @@ if __name__ == "__main__":
     seed_everything(args.seed)  # fix the seed for reproducibility
     train_multitask(args)
     test_model(args)
+
+
