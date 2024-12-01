@@ -283,11 +283,12 @@ def train_multitask(args):
     sst_train_dataset = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_dataset = SentenceClassificationDataset(sst_dev_data, args)
 
-    para_train_dataset = SentencePairDataset(para_train_data, args, task='paraphrase')
-    para_dev_dataset = SentencePairDataset(para_dev_data, args, task='paraphrase')
+    # **Modify Here: Replace 'task' with 'isRegression'**
+    para_train_dataset = SentencePairDataset(para_train_data, args, isRegression=False)  # Paraphrase Detection
+    para_dev_dataset = SentencePairDataset(para_dev_data, args, isRegression=False)
 
-    sts_train_dataset = SentencePairDataset(sts_train_data, args, task='similarity')
-    sts_dev_dataset = SentencePairDataset(sts_dev_data, args, task='similarity')
+    sts_train_dataset = SentencePairDataset(sts_train_data, args, isRegression=True)  # Semantic Textual Similarity
+    sts_dev_dataset = SentencePairDataset(sts_dev_data, args, isRegression=True)
 
     # Create DataLoaders
     sst_train_dataloader = DataLoader(
