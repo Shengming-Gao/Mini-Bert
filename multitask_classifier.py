@@ -4,7 +4,7 @@
 Multitask BERT Pretraining and Fine-Tuning Script.
 
 This script performs the following:
-1. Pretrains a BERT model using Masked Language Modeling (MLM) on the combined SST, Quora, and SemEval datasets.
+1. Pretrains a BERT model using Masked Language Modeling (MLM) exclusively on the SST dataset.
 2. Fine-tunes the pretrained model on three specific tasks:
    - Sentiment Classification
    - Paraphrase Detection
@@ -21,10 +21,8 @@ import random
 import numpy as np
 import argparse
 import sys
-import re
 import os
 from types import SimpleNamespace
-import csv
 
 import torch
 from torch import nn
@@ -64,6 +62,7 @@ from evaluation import (
 # Disable tqdm progress bars if needed
 TQDM_DISABLE = False
 
+
 # Fix the random seed for reproducibility
 def seed_everything(seed=11711):
     random.seed(seed)
@@ -74,9 +73,11 @@ def seed_everything(seed=11711):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+
 # Constants
 BERT_HIDDEN_SIZE = 768
 N_SENTIMENT_CLASSES = 5  # Adjust based on your dataset
+
 
 # MultitaskBERT Model with MLM Head
 class MultitaskBERT(nn.Module):
@@ -118,7 +119,7 @@ class MultitaskBERT(nn.Module):
         self.tokenizer = tokenizer  # Store tokenizer for MLM
 
         # Tie weights between MLM head and BERT word embeddings
-        self.mlm_head.weight = self.bert.word_embedding.weight  # Ensure this matches your BertModel implementation
+        self.mlm_head.weight = self.bert.word_embeddings.weight  # Ensure this matches your BertModel implementation
 
         # Initialize weights for classification heads
         nn.init.xavier_uniform_(self.sentiment_classifier.weight)
@@ -172,6 +173,7 @@ class MultitaskBERT(nn.Module):
             prediction_scores = prediction_scores.view(-1,
                                                        prediction_scores.size(-1))  # (batch_size * seq_len, vocab_size)
             labels = labels.view(-1)  # (batch_size * seq_len)
+
             loss = loss_fct(prediction_scores, labels)
             return loss, prediction_scores
 
@@ -197,6 +199,7 @@ class MultitaskBERT(nn.Module):
             loss, logits = self.forward(input_ids=input_ids1, attention_mask=attention_mask1, task='similarity',
                                         labels=None, input_ids2=input_ids2, attention_mask2=attention_mask2)
         return logits.squeeze(-1)
+
 
 # MLMDataset Class
 class MLMDataset(Dataset):
@@ -249,6 +252,7 @@ class MLMDataset(Dataset):
             'labels': torch.stack([item['labels'] for item in batch])
         }
 
+
 # Save Model Function
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
@@ -263,6 +267,7 @@ def save_model(model, optimizer, args, config, filepath):
 
     torch.save(save_info, filepath)
     print(f"Saved the model to {filepath}")
+
 
 # Data Extraction Functions
 def extract_sentences_sst(file_path):
@@ -279,6 +284,7 @@ def extract_sentences_sst(file_path):
         sys.exit(1)
 
     return df['sentence'].dropna().tolist()
+
 
 def extract_sentences_quora(file_path):
     import pandas as pd
@@ -297,6 +303,7 @@ def extract_sentences_quora(file_path):
     sentences = df['sentence1'].dropna().tolist() + df['sentence2'].dropna().tolist()
     return sentences
 
+
 def extract_sentences_semeval(file_path):
     import pandas as pd
     try:
@@ -314,25 +321,18 @@ def extract_sentences_semeval(file_path):
     sentences = df['sentence1'].dropna().tolist() + df['sentence2'].dropna().tolist()
     return sentences
 
+
 # Prepare MLM Dataset
 def prepare_mlm_data(args, tokenizer):
     '''
-    Prepare MLM data by extracting sentences from SST, Quora, and SemEval datasets.
+    Prepare MLM data by extracting sentences from SST dataset.
     '''
     # Extract sentences
     sst_train_sentences = extract_sentences_sst(args.sst_train)
     sst_dev_sentences = extract_sentences_sst(args.sst_dev)
 
-    quora_train_sentences = extract_sentences_quora(args.para_train)
-    quora_dev_sentences = extract_sentences_quora(args.para_dev)
-
-    semeval_train_sentences = extract_sentences_semeval(args.sts_train)
-    semeval_dev_sentences = extract_sentences_semeval(args.sts_dev)
-
-    # Combine all sentences
-    all_sentences = sst_train_sentences + sst_dev_sentences + \
-                    quora_train_sentences + quora_dev_sentences + \
-                    semeval_train_sentences + semeval_dev_sentences
+    # Combine all sentences from SST
+    all_sentences = sst_train_sentences + sst_dev_sentences
 
     # Remove duplicates
     all_sentences = list(set(all_sentences))
@@ -352,10 +352,11 @@ def prepare_mlm_data(args, tokenizer):
 
     return mlm_dataset
 
+
 # Pretraining Function
 def pretrain_mlm(args, model, tokenizer, device, config):
     '''
-    Pretrain the model using Masked Language Modeling (MLM) on the combined datasets.
+    Pretrain the model using Masked Language Modeling (MLM) on the SST dataset.
     '''
     from torch.utils.data import DataLoader
 
@@ -395,6 +396,7 @@ def pretrain_mlm(args, model, tokenizer, device, config):
             best_mlm_loss = avg_loss
             save_model(model, optimizer, args, config, args.mlm_save_path)
             print(f"Best MLM model saved with loss {best_mlm_loss:.4f}")
+
 
 # Fine-Tuning Function
 def train_multitask(args, model, tokenizer, device, config):
@@ -539,6 +541,7 @@ def train_multitask(args, model, tokenizer, device, config):
               f"Paraphrase Acc = {dev_paraphrase_accuracy:.3f}, "
               f"STS Corr = {dev_sts_corr:.3f}")
 
+
 # Test Model Function
 def test_model(args):
     '''
@@ -549,7 +552,8 @@ def test_model(args):
 
         # Load the fine-tuned model
         if not os.path.exists(args.finetune_save_path):
-            raise FileNotFoundError(f"Fine-tuned model not found at {args.finetune_save_path}. Please run fine-tuning first.")
+            raise FileNotFoundError(
+                f"Fine-tuned model not found at {args.finetune_save_path}. Please run fine-tuning first.")
 
         saved = torch.load(args.finetune_save_path, map_location=device)
         config = saved['model_config']
@@ -586,6 +590,7 @@ def test_model(args):
                              sst_test_dataloader, para_test_dataloader, sts_test_dataloader)
         print("Model testing completed.")
 
+
 # Argument Parsing Function
 def get_args():
     parser = argparse.ArgumentParser(description="Multitask BERT Pretraining and Fine-Tuning")
@@ -615,8 +620,6 @@ def get_args():
     # MLM data paths
     parser.add_argument("--mlm_save_path", type=str, default="pretrained-mlm-model.pt",
                         help="Path to save the pretrained MLM model.")
-    parser.add_argument("--mlm_probability", type=float, default=0.15,
-                        help="Probability of masking tokens for MLM pretraining.")
 
     # Fine-tuning save path
     parser.add_argument("--finetune_save_path", type=str, default="finetuned-model.pt",
@@ -667,6 +670,7 @@ def get_args():
     args = parser.parse_args()
     return args
 
+
 # Main Execution Flow
 if __name__ == "__main__":
     args = get_args()
@@ -678,6 +682,7 @@ if __name__ == "__main__":
 
     # Initialize tokenizer
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')  # Adjust as per your implementation
+    print(f"Tokenizer vocab size: {tokenizer.vocab_size}")
 
     # Create model configuration
     if args.pretrain and args.finetune:
@@ -710,7 +715,7 @@ if __name__ == "__main__":
 
     # Perform MLM Pretraining if flag is set
     if args.pretrain:
-        print("Starting MLM Pretraining...")
+        print("Starting MLM Pretraining on SST data...")
         pretrain_mlm(args, model, tokenizer, device, config)
     else:
         print("Skipping MLM Pretraining.")
@@ -720,13 +725,14 @@ if __name__ == "__main__":
         # Load the pretrained MLM model if pretraining was performed in a previous run
         if not args.pretrain:
             if not os.path.exists(args.mlm_save_path):
-                raise FileNotFoundError(f"Pretrained MLM model not found at {args.mlm_save_path}. Please run pretraining first.")
+                raise FileNotFoundError(
+                    f"Pretrained MLM model not found at {args.mlm_save_path}. Please run pretraining first.")
             print(f"Loading pretrained MLM model from {args.mlm_save_path}...")
             saved_mlm = torch.load(args.mlm_save_path, map_location=device)
             model.load_state_dict(saved_mlm['model'])
             print("Pretrained MLM model loaded successfully.")
 
-        print("Starting Fine-Tuning...")
+        print("Starting Fine-Tuning on Sentiment, Paraphrase, and Similarity tasks...")
         train_multitask(args, model, tokenizer, device, config)
     else:
         print("Skipping Fine-Tuning.")
