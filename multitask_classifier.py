@@ -667,6 +667,9 @@ def get_args():
     parser.add_argument("--sts_test_out", type=str, default="predictions/sts-test-output.csv",
                         help="Output path for SemEval test predictions.")
 
+    parser.add_argument("--mlm_probability", type=float, default=0.15,
+                        help="Probability of masking tokens for MLM pretraining.")
+
     args = parser.parse_args()
     return args
 
