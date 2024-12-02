@@ -119,7 +119,9 @@ class MultitaskBERT(nn.Module):
         self.tokenizer = tokenizer  # Store tokenizer for MLM
 
         # Tie weights between MLM head and BERT word embeddings
-        self.mlm_head.weight = self.bert.word_embedding.weight  # Ensure this matches your BertModel implementation
+        # Adjust based on your bert.py attribute name
+        # If bert.py uses 'word_embedding' (singular)
+        self.mlm_head.weight = self.bert.word_embedding.weight
 
         # Initialize weights for classification heads
         nn.init.xavier_uniform_(self.sentiment_classifier.weight)
@@ -238,12 +240,12 @@ class MLMDataset(Dataset):
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
         mask_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
         labels[indices_replaced] = mask_token_id
-        inputs[indices_replaced] = mask_token_id
+        self.input_ids[indices_replaced] = mask_token_id
 
         indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
         random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
         labels[indices_random] = random_words[indices_random]
-        inputs[indices_random] = random_words[indices_random]
+        self.input_ids[indices_random] = random_words[indices_random]
 
         # The rest 10% are left unchanged
 
