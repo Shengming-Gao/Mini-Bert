@@ -119,7 +119,7 @@ class MultitaskBERT(nn.Module):
         self.tokenizer = tokenizer  # Store tokenizer for MLM
 
         # Tie weights between MLM head and BERT word embeddings
-        self.mlm_head.weight = self.bert.word_embeddings.weight  # Ensure this matches your BertModel implementation
+        self.mlm_head.weight = self.bert.word_embedding.weight  # Ensure this matches your BertModel implementation
 
         # Initialize weights for classification heads
         nn.init.xavier_uniform_(self.sentiment_classifier.weight)
