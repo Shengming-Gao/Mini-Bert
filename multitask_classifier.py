@@ -165,12 +165,13 @@ class MultitaskBERT(nn.Module):
             return loss, logits
 
         elif task == 'mlm':
-            prediction_scores = self.mlm_head(sequence_output)
+            prediction_scores = self.mlm_head(sequence_output)  # (batch_size, seq_len, vocab_size)
             loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            # Reshape to (batch_size * seq_len, vocab_size)
-            prediction_scores = prediction_scores.view(-1, self.mlm_head.weight.size(1))
-            # Reshape labels to (batch_size * seq_len)
-            labels = labels.view(-1)
+
+            # Correct reshaping here
+            prediction_scores = prediction_scores.view(-1,
+                                                       prediction_scores.size(-1))  # (batch_size * seq_len, vocab_size)
+            labels = labels.view(-1)  # (batch_size * seq_len)
             loss = loss_fct(prediction_scores, labels)
             return loss, prediction_scores
 
