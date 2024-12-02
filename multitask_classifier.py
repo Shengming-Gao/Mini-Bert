@@ -6,9 +6,9 @@ Multitask BERT Pretraining and Fine-Tuning Script.
 This script performs the following:
 1. Pretrains a BERT model using Masked Language Modeling (MLM) exclusively on the SST dataset.
 2. Fine-tunes the pretrained model on three specific tasks:
-   - Sentiment Classification
-   - Paraphrase Detection
-   - Semantic Textual Similarity
+   - Sentiment Classification (SST)
+   - Paraphrase Detection (Quora)
+   - Semantic Textual Similarity (SemEval)
 3. Evaluates the model using provided evaluation utility functions.
 4. Generates predictions for test datasets.
 
@@ -119,7 +119,7 @@ class MultitaskBERT(nn.Module):
         self.tokenizer = tokenizer  # Store tokenizer for MLM
 
         # Tie weights between MLM head and BERT word embeddings
-        self.mlm_head.weight = self.bert.word_embedding.weight  # Ensure this matches your BertModel implementation
+        self.mlm_head.weight = self.bert.word_embeddings.weight  # Ensure this matches your BertModel implementation
 
         # Initialize weights for classification heads
         nn.init.xavier_uniform_(self.sentiment_classifier.weight)
@@ -140,8 +140,11 @@ class MultitaskBERT(nn.Module):
 
         if task == 'sentiment':
             logits = self.sentiment_classifier(pooled_output)
-            loss = nn.CrossEntropyLoss()(logits, labels.view(-1))
-            return loss, logits
+            if labels is not None:
+                loss = nn.CrossEntropyLoss()(logits, labels.view(-1))
+                return loss, logits
+            else:
+                return logits
 
         elif task == 'paraphrase':
             if input_ids2 is None or attention_mask2 is None:
@@ -150,9 +153,12 @@ class MultitaskBERT(nn.Module):
             pooled_output2 = outputs2['pooler_output']
             combined_pooled = torch.cat((pooled_output, pooled_output2), dim=1)  # (batch_size, hidden_size * 2)
             logits = self.paraphrase_classifier(combined_pooled)
-            loss_fn = nn.BCEWithLogitsLoss()
-            loss = loss_fn(logits.view(-1), labels.view(-1))
-            return loss, logits
+            if labels is not None:
+                loss_fn = nn.BCEWithLogitsLoss()
+                loss = loss_fn(logits.view(-1), labels.view(-1))
+                return loss, logits
+            else:
+                return logits
 
         elif task == 'similarity':
             if input_ids2 is None or attention_mask2 is None:
@@ -161,9 +167,12 @@ class MultitaskBERT(nn.Module):
             pooled_output2 = outputs2['pooler_output']
             combined_pooled = torch.cat((pooled_output, pooled_output2), dim=1)  # (batch_size, hidden_size * 2)
             logits = self.similarity_regressor(combined_pooled)
-            loss_fn = nn.MSELoss()
-            loss = loss_fn(logits.view(-1), labels.view(-1))
-            return loss, logits
+            if labels is not None:
+                loss_fn = nn.MSELoss()
+                loss = loss_fn(logits.view(-1), labels.view(-1))
+                return loss, logits
+            else:
+                return logits
 
         elif task == 'mlm':
             prediction_scores = self.mlm_head(sequence_output)  # (batch_size, seq_len, vocab_size)
@@ -174,30 +183,34 @@ class MultitaskBERT(nn.Module):
                                                        prediction_scores.size(-1))  # (batch_size * seq_len, vocab_size)
             labels = labels.view(-1)  # (batch_size * seq_len)
 
-            loss = loss_fct(prediction_scores, labels)
-            return loss, prediction_scores
+            if labels is not None:
+                loss = loss_fct(prediction_scores, labels)
+                return loss, prediction_scores
+            else:
+                return prediction_scores
 
         else:
             raise ValueError(f"Unknown task: {task}")
 
+    # Prediction Methods
     def predict_sentiment(self, input_ids, attention_mask):
         '''Sentiment prediction without loss computation'''
         with torch.no_grad():
-            loss, logits = self.forward(input_ids, attention_mask, task='sentiment', labels=None)
+            logits = self.forward(input_ids, attention_mask, task='sentiment', labels=None)
         return logits
 
     def predict_paraphrase(self, input_ids1, attention_mask1, input_ids2, attention_mask2):
         '''Paraphrase prediction without loss computation'''
         with torch.no_grad():
-            loss, logits = self.forward(input_ids=input_ids1, attention_mask=attention_mask1, task='paraphrase',
-                                        labels=None, input_ids2=input_ids2, attention_mask2=attention_mask2)
+            logits = self.forward(input_ids=input_ids1, attention_mask=attention_mask1, task='paraphrase',
+                                  labels=None, input_ids2=input_ids2, attention_mask2=attention_mask2)
         return torch.sigmoid(logits)
 
     def predict_similarity(self, input_ids1, attention_mask1, input_ids2, attention_mask2):
         '''Similarity prediction without loss computation'''
         with torch.no_grad():
-            loss, logits = self.forward(input_ids=input_ids1, attention_mask=attention_mask1, task='similarity',
-                                        labels=None, input_ids2=input_ids2, attention_mask2=attention_mask2)
+            logits = self.forward(input_ids=input_ids1, attention_mask=attention_mask1, task='similarity',
+                                  labels=None, input_ids2=input_ids2, attention_mask2=attention_mask2)
         return logits.squeeze(-1)
 
 
@@ -225,10 +238,12 @@ class MLMDataset(Dataset):
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
         mask_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
         labels[indices_replaced] = mask_token_id
+        inputs[indices_replaced] = mask_token_id
 
         indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
         random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
         labels[indices_random] = random_words[indices_random]
+        inputs[indices_random] = random_words[indices_random]
 
         # The rest 10% are left unchanged
 
@@ -286,7 +301,7 @@ def extract_sentences_sst(file_path):
     return df['sentence'].dropna().tolist()
 
 
-def extract_sentences_quora(file_path):
+def extract_sentences_quora(file_path, para_train_size=None):
     import pandas as pd
     try:
         # Specify only the 'sentence1' and 'sentence2' columns
@@ -298,6 +313,9 @@ def extract_sentences_quora(file_path):
     except pd.errors.ParserError as e:
         print(f"ParserError while reading {file_path}: {e}")
         sys.exit(1)
+
+    if para_train_size is not None:
+        df = df.sample(n=para_train_size, random_state=42).reset_index(drop=True)
 
     # Combine questions into a single list
     sentences = df['sentence1'].dropna().tolist() + df['sentence2'].dropna().tolist()
@@ -363,7 +381,7 @@ def pretrain_mlm(args, model, tokenizer, device, config):
     # Prepare MLM data
     mlm_dataset = prepare_mlm_data(args, tokenizer)
     mlm_dataloader = DataLoader(mlm_dataset, shuffle=True, batch_size=args.batch_size,
-                                collate_fn=MLMDataset.collate_fn)
+                                collate_fn=MLMDataset.collate_fn, num_workers=4)
 
     # Initialize optimizer
     optimizer = AdamW(model.parameters(), lr=args.lr)
@@ -405,7 +423,7 @@ def train_multitask(args, model, tokenizer, device, config):
     '''
     # Load data for all three tasks
     sst_train_data, num_labels, para_train_data, sts_train_data = load_multitask_data(
-        args.sst_train, args.para_train, args.sts_train, split='train')
+        args.sst_train, args.para_train, args.sts_train, split='train', para_train_size=args.para_train_size)
     sst_dev_data, _, para_dev_data, sts_dev_data = load_multitask_data(
         args.sst_dev, args.para_dev, args.sts_dev, split='dev')
 
@@ -413,25 +431,25 @@ def train_multitask(args, model, tokenizer, device, config):
     sst_train_dataset = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_dataset = SentenceClassificationDataset(sst_dev_data, args)
     sst_train_dataloader = DataLoader(sst_train_dataset, shuffle=True, batch_size=args.batch_size,
-                                      collate_fn=sst_train_dataset.collate_fn)
+                                      collate_fn=sst_train_dataset.collate_fn, num_workers=4)
     sst_dev_dataloader = DataLoader(sst_dev_dataset, shuffle=False, batch_size=args.batch_size,
-                                    collate_fn=sst_dev_dataset.collate_fn)
+                                    collate_fn=sst_dev_dataset.collate_fn, num_workers=4)
 
     # Create datasets and dataloaders for Paraphrase Detection
     para_train_dataset = SentencePairDataset(para_train_data, args)
     para_dev_dataset = SentencePairDataset(para_dev_data, args)
     para_train_dataloader = DataLoader(para_train_dataset, shuffle=True, batch_size=args.batch_size,
-                                       collate_fn=para_train_dataset.collate_fn)
+                                       collate_fn=para_train_dataset.collate_fn, num_workers=4)
     para_dev_dataloader = DataLoader(para_dev_dataset, shuffle=False, batch_size=args.batch_size,
-                                     collate_fn=para_dev_dataset.collate_fn)
+                                     collate_fn=para_dev_dataset.collate_fn, num_workers=4)
 
     # Create datasets and dataloaders for Semantic Textual Similarity
     sts_train_dataset = SentencePairDataset(sts_train_data, args, isRegression=True)
     sts_dev_dataset = SentencePairDataset(sts_dev_data, args, isRegression=True)
     sts_train_dataloader = DataLoader(sts_train_dataset, shuffle=True, batch_size=args.batch_size,
-                                      collate_fn=sts_train_dataset.collate_fn)
+                                      collate_fn=sts_train_dataset.collate_fn, num_workers=4)
     sts_dev_dataloader = DataLoader(sts_dev_dataset, shuffle=False, batch_size=args.batch_size,
-                                    collate_fn=sts_dev_dataset.collate_fn)
+                                    collate_fn=sts_dev_dataset.collate_fn, num_workers=4)
 
     # Initialize the optimizer for fine-tuning
     optimizer = AdamW(model.parameters(), lr=args.lr)
@@ -575,15 +593,15 @@ def test_model(args):
         # Create datasets and dataloaders for testing
         sst_test_dataset = SentenceClassificationTestDataset(sst_test_data, args)
         sst_test_dataloader = DataLoader(sst_test_dataset, shuffle=False, batch_size=args.batch_size,
-                                         collate_fn=sst_test_dataset.collate_fn)
+                                         collate_fn=sst_test_dataset.collate_fn, num_workers=4)
 
         para_test_dataset = SentencePairTestDataset(para_test_data, args)
         para_test_dataloader = DataLoader(para_test_dataset, shuffle=False, batch_size=args.batch_size,
-                                          collate_fn=para_test_dataset.collate_fn)
+                                          collate_fn=para_test_dataset.collate_fn, num_workers=4)
 
         sts_test_dataset = SentencePairTestDataset(sts_test_data, args, isRegression=True)
         sts_test_dataloader = DataLoader(sts_test_dataset, shuffle=False, batch_size=args.batch_size,
-                                         collate_fn=sts_test_dataset.collate_fn)
+                                         collate_fn=sts_test_dataset.collate_fn, num_workers=4)
 
         print("Starting model testing...")
         test_model_multitask(args, model, device,
@@ -667,8 +685,9 @@ def get_args():
     parser.add_argument("--sts_test_out", type=str, default="predictions/sts-test-output.csv",
                         help="Output path for SemEval test predictions.")
 
-    parser.add_argument("--mlm_probability", type=float, default=0.15,
-                        help="Probability of masking tokens for MLM pretraining.")
+    # Argument to limit the size of the Quora training dataset
+    parser.add_argument("--para_train_size", type=int, default=None,
+                        help="Maximum number of training examples to use from the Quora dataset. If not set, use all available data.")
 
     args = parser.parse_args()
     return args
@@ -731,8 +750,7 @@ if __name__ == "__main__":
                 raise FileNotFoundError(
                     f"Pretrained MLM model not found at {args.mlm_save_path}. Please run pretraining first.")
             print(f"Loading pretrained MLM model from {args.mlm_save_path}...")
-            saved_mlm = torch.load(args.mlm_save_path, map_location=device)
-            model.load_state_dict(saved_mlm['model'])
+            model.load_state_dict(torch.load(args.mlm_save_path, map_location=device), strict=False)
             print("Pretrained MLM model loaded successfully.")
 
         print("Starting Fine-Tuning on Sentiment, Paraphrase, and Similarity tasks...")
