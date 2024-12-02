@@ -494,6 +494,8 @@ This script performs the following:
 '''
 # !/usr/bin/env python3
 
+''#!/usr/bin/env python3
+
 '''
 Multitask BERT Pretraining and Fine-Tuning Script.
 
@@ -525,16 +527,17 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 # Import your custom BertModel and BertTokenizer
-# Ensure that these are correctly implemented in your 'bert' module
+# Ensure that these are correctly implemented in your 'bert' and 'tokenizer' modules
 from bert import BertModel
 from tokenizer import BertTokenizer
 
-
 # If you have a custom optimizer, ensure it's correctly implemented
 # Otherwise, use PyTorch's built-in AdamW
+try:
+    from optimizer import AdamW
+except ImportError:
+    from torch.optim import AdamW
 
-from bert import BertModel
-from optimizer import AdamW
 from tqdm import tqdm
 
 # Import your dataset and evaluation utility functions
@@ -556,7 +559,6 @@ from evaluation import (
 # Disable tqdm progress bars if needed
 TQDM_DISABLE = False
 
-
 # Fix the random seed for reproducibility
 def seed_everything(seed=11711):
     random.seed(seed)
@@ -567,11 +569,9 @@ def seed_everything(seed=11711):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-
 # Constants
 BERT_HIDDEN_SIZE = 768
 N_SENTIMENT_CLASSES = 5  # Adjust based on your dataset
-
 
 # MultitaskBERT Model with MLM Head
 class MultitaskBERT(nn.Module):
@@ -589,12 +589,16 @@ class MultitaskBERT(nn.Module):
         # Load pre-trained BERT model
         self.bert = BertModel.from_pretrained('bert-base-uncased')  # Adjust as per your implementation
 
-        # Freeze or unfreeze BERT parameters based on training option
-        for param in self.bert.parameters():
-            if config.option == 'pretrain':
-                param.requires_grad = False  # Freeze during MLM pretraining (if desired)
-            elif config.option == 'finetune':
-                param.requires_grad = True  # Unfreeze during fine-tuning
+        # Freeze or unfreeze BERT parameters based on training phase
+        if config.phase == 'pretrain':
+            for param in self.bert.parameters():
+                param.requires_grad = True  # Trainable during pretraining
+        elif config.phase == 'finetune':
+            for param in self.bert.parameters():
+                param.requires_grad = True  # Trainable during fine-tuning
+        elif config.phase == 'both':
+            for param in self.bert.parameters():
+                param.requires_grad = True  # Trainable during both phases
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
@@ -692,7 +696,6 @@ class MultitaskBERT(nn.Module):
                                   input_ids2=input_ids2, attention_mask2=attention_mask2)[1]
         return logits.squeeze(-1)
 
-
 # MLMDataset Class
 class MLMDataset(Dataset):
     def __init__(self, input_ids, attention_mask, tokenizer, mlm_probability=0.15):
@@ -716,7 +719,6 @@ class MLMDataset(Dataset):
         # 80% MASK, 10% random, 10% original
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
         mask_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
-        labels_to_replace = labels.clone()
         labels[indices_replaced] = mask_token_id
 
         indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
@@ -745,7 +747,6 @@ class MLMDataset(Dataset):
             'labels': torch.stack([item['labels'] for item in batch])
         }
 
-
 # Save Model Function
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
@@ -761,7 +762,6 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"Saved the model to {filepath}")
 
-
 # Data Extraction Functions
 def extract_sentences_sst(file_path):
     import pandas as pd
@@ -772,7 +772,6 @@ def extract_sentences_sst(file_path):
     else:
         raise ValueError("SST dataset must have a 'sentence' column.")
 
-
 def extract_sentences_quora(file_path):
     import pandas as pd
     df = pd.read_csv(file_path)
@@ -782,7 +781,6 @@ def extract_sentences_quora(file_path):
     else:
         raise ValueError("Quora dataset must have 'question1' and 'question2' columns.")
 
-
 def extract_sentences_semeval(file_path):
     import pandas as pd
     df = pd.read_csv(file_path)
@@ -791,7 +789,6 @@ def extract_sentences_semeval(file_path):
         return df['sentence1'].dropna().tolist() + df['sentence2'].dropna().tolist()
     else:
         raise ValueError("SemEval dataset must have 'sentence1' and 'sentence2' columns.")
-
 
 # Prepare MLM Dataset
 def prepare_mlm_data(args, tokenizer):
@@ -830,7 +827,6 @@ def prepare_mlm_data(args, tokenizer):
     )
 
     return mlm_dataset
-
 
 # Pretraining Function
 def pretrain_mlm(args, model, tokenizer, device, config):
@@ -875,7 +871,6 @@ def pretrain_mlm(args, model, tokenizer, device, config):
             best_mlm_loss = avg_loss
             save_model(model, optimizer, args, config, args.mlm_save_path)
             print(f"Best MLM model saved with loss {best_mlm_loss:.4f}")
-
 
 # Fine-Tuning Function
 def train_multitask(args, model, tokenizer, device, config):
@@ -1020,7 +1015,6 @@ def train_multitask(args, model, tokenizer, device, config):
               f"Paraphrase Acc = {dev_paraphrase_accuracy:.3f}, "
               f"STS Corr = {dev_sts_corr:.3f}")
 
-
 # Test Model Function
 def test_model(args):
     '''
@@ -1068,7 +1062,6 @@ def test_model(args):
                              sst_test_dataloader, para_test_dataloader, sts_test_dataloader)
         print("Model testing completed.")
 
-
 # Argument Parsing Function
 def get_args():
     parser = argparse.ArgumentParser(description="Multitask BERT Pretraining and Fine-Tuning")
@@ -1112,9 +1105,22 @@ def get_args():
                         help="Number of epochs for MLM pretraining.")
     parser.add_argument("--finetune_epochs", type=int, default=10,
                         help="Number of epochs for fine-tuning.")
-    parser.add_argument("--option", type=str,
-                        help="Training option: 'pretrain' to perform MLM pretraining; 'finetune' to perform fine-tuning on tasks.",
-                        choices=('pretrain', 'finetune'), default="finetune")
+
+    # Flags for training phases
+    parser.add_argument("--pretrain", action='store_true',
+                        help="Flag to perform MLM pretraining before fine-tuning.")
+    parser.add_argument("--finetune", action='store_true',
+                        help="Flag to perform fine-tuning on specific tasks.")
+
+    # Hyperparameters
+    parser.add_argument("--batch_size", type=int, default=8,
+                        help="Batch size for training and evaluation.")
+    parser.add_argument("--hidden_dropout_prob", type=float, default=0.3,
+                        help="Dropout probability for hidden layers.")
+    parser.add_argument("--lr", type=float, default=1e-5,
+                        help="Learning rate.")
+
+    # Device
     parser.add_argument("--use_gpu", action='store_true',
                         help="Use GPU for training.")
 
@@ -1134,21 +1140,8 @@ def get_args():
     parser.add_argument("--sts_test_out", type=str, default="predictions/sts-test-output.csv",
                         help="Output path for SemEval test predictions.")
 
-    # Hyperparameters
-    parser.add_argument("--batch_size", type=int, default=8,
-                        help="Batch size for training and evaluation.")
-    parser.add_argument("--hidden_dropout_prob", type=float, default=0.3,
-                        help="Dropout probability for hidden layers.")
-    parser.add_argument("--lr", type=float, default=1e-5,
-                        help="Learning rate.")
-
-    # Flags
-    parser.add_argument("--pretrain", action='store_true',
-                        help="Flag to perform MLM pretraining before fine-tuning.")
-
     args = parser.parse_args()
     return args
-
 
 # Main Execution Flow
 if __name__ == "__main__":
@@ -1163,7 +1156,7 @@ if __name__ == "__main__":
         'num_labels': N_SENTIMENT_CLASSES,  # Assuming consistent across tasks
         'hidden_size': BERT_HIDDEN_SIZE,
         'data_dir': '.',  # Adjust if necessary
-        'option': args.option
+        'phase': 'both' if args.pretrain and args.finetune else ('pretrain' if args.pretrain else ('finetune' if args.finetune else 'none'))
     }
     config = SimpleNamespace(**config)
 
@@ -1177,16 +1170,33 @@ if __name__ == "__main__":
     # Fix the random seed for reproducibility
     seed_everything(args.seed)
 
+    # Perform MLM Pretraining if flag is set
     if args.pretrain:
         print("Starting MLM Pretraining...")
         pretrain_mlm(args, model, tokenizer, device, config)
     else:
         print("Skipping MLM Pretraining.")
 
-    # Fine-Tuning Phase
-    print("Starting Fine-Tuning...")
-    train_multitask(args, model, tokenizer, device, config)
+    # Perform Fine-Tuning if flag is set
+    if args.finetune:
+        # Load the pretrained MLM model if pretraining was performed in a previous run
+        if not args.pretrain:
+            if not os.path.exists(args.mlm_save_path):
+                raise FileNotFoundError(f"Pretrained MLM model not found at {args.mlm_save_path}. Please run pretraining first.")
+            print(f"Loading pretrained MLM model from {args.mlm_save_path}...")
+            saved_mlm = torch.load(args.mlm_save_path, map_location=device)
+            model.load_state_dict(saved_mlm['model'])
+            print("Pretrained MLM model loaded successfully.")
 
-    # Testing Phase
-    print("Starting Testing...")
-    test_model(args)
+        print("Starting Fine-Tuning...")
+        train_multitask(args, model, tokenizer, device, config)
+    else:
+        print("Skipping Fine-Tuning.")
+
+    # Testing Phase (optional, only if fine-tuning is done)
+    if args.finetune:
+        print("Starting Testing...")
+        test_model(args)
+        print("Model testing completed.")
+    else:
+        print("Skipping Testing Phase.")
