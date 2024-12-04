@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     # The path to the previously saved model checkpoint
     # Update this to match the filename you used when training.
-    parser.add_argument("--filepath", type=str, default="pretrain-10-1e-5-multitask.pt")
+    parser.add_argument("--filepath", type=str, default="pretrain-10-0.001-multitask.pt")
 
     args = parser.parse_args()
     seed_everything(args.seed)
