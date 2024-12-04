@@ -13,7 +13,7 @@ from tqdm import tqdm
 from datasets import SentenceClassificationDataset, SentencePairDataset, \
     load_multitask_data, load_multitask_test_data
 
-from evaluation import model_eval_sst, test_model_multitask
+from evaluation import model_eval_sst, test_model_multitask, evaluate_paraphrase, evaluate_sts
 
 
 TQDM_DISABLE=True
@@ -210,19 +210,6 @@ def save_model(model, optimizer, args, config, filepath):
 #
 #
 #
-# def test_model(args):
-#     with torch.no_grad():
-#         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-#         saved = torch.load(args.filepath)
-#         config = saved['model_config']
-#
-#         model = MultitaskBERT(config)
-#         model.load_state_dict(saved['model'])
-#         model = model.to(device)
-#         print(f"Loaded model to test from {args.filepath}")
-#
-#         test_model_multitask(args, model, device)
-
 def train_multitask(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -339,7 +326,8 @@ def train_multitask(args):
         train_loss = train_loss / num_batches
 
         # Evaluate on the paraphrase dev set
-        dev_acc, dev_f1 = evaluate_paraphrase(para_dev_dataloader, model, device)  # Implement this similar to sst eval
+        # Todo: reference to evaluation.py and modify the following line.
+        dev_acc, dev_f1 = evaluate_paraphrase(para_dev_dataloader, model, device)
         if dev_acc > best_para_acc:
             best_para_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
@@ -380,13 +368,27 @@ def train_multitask(args):
         train_loss = train_loss / num_batches
 
         # Evaluate on the STS dev set
-        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)  # Implement or call your STS eval function
+        # Todo: reference to evaluation.py and modify the following line.
+        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
         if dev_pearson > best_sts_pearson:
             best_sts_pearson = dev_pearson
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"[STS] Epoch {epoch}: train loss={train_loss:.3f}, dev pearson={dev_pearson:.3f}")
 
+
+def test_model(args):
+    with torch.no_grad():
+        device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+        saved = torch.load(args.filepath)
+        config = saved['model_config']
+
+        model = MultitaskBERT(config)
+        model.load_state_dict(saved['model'])
+        model = model.to(device)
+        print(f"Loaded model to test from {args.filepath}")
+
+        test_model_multitask(args, model, device)
 
 
 def get_args():

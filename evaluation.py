@@ -26,7 +26,66 @@ from datasets import load_multitask_data, load_multitask_test_data, \
     SentencePairDataset, SentencePairTestDataset
 
 
+# In evaluation.py:
+from sklearn.metrics import f1_score
+from scipy.stats import pearsonr
+
 TQDM_DISABLE = True
+
+
+def evaluate_paraphrase(dataloader, model, device):
+    """
+    Evaluate the model on paraphrase detection task (binary classification).
+    Returns accuracy and F1 score.
+    """
+    model.eval()
+    para_y_true = []
+    para_y_pred = []
+    with torch.no_grad():
+        for batch in dataloader:
+            b_ids1, b_mask1, b_ids2, b_mask2, b_labels, b_sent_ids = \
+                batch['token_ids_1'].to(device), batch['attention_mask_1'].to(device), \
+                batch['token_ids_2'].to(device), batch['attention_mask_2'].to(device), \
+                batch['labels'].to(device), batch['sent_ids']
+
+            logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
+            preds = (torch.sigmoid(logits) > 0.5).int().cpu().numpy()
+            labels = b_labels.cpu().numpy()
+
+            para_y_pred.extend(preds)
+            para_y_true.extend(labels)
+
+    accuracy = np.mean(np.array(para_y_pred) == np.array(para_y_true))
+    f1 = f1_score(para_y_true, para_y_pred)
+    return accuracy, f1
+
+
+def evaluate_sts(dataloader, model, device):
+    """
+    Evaluate the model on STS (regression) task.
+    Returns Pearson correlation coefficient.
+    """
+    model.eval()
+    sts_y_true = []
+    sts_y_pred = []
+    with torch.no_grad():
+        for batch in dataloader:
+            b_ids1, b_mask1, b_ids2, b_mask2, b_labels, b_sent_ids = \
+                batch['token_ids_1'].to(device), batch['attention_mask_1'].to(device), \
+                batch['token_ids_2'].to(device), batch['attention_mask_2'].to(device), \
+                batch['labels'].to(device), batch['sent_ids']
+
+            logits = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+            preds = logits.cpu().numpy()
+            labels = b_labels.cpu().numpy()
+
+            sts_y_pred.extend(preds)
+            sts_y_true.extend(labels)
+
+    # Pearson correlation
+    corr, _ = pearsonr(sts_y_pred, sts_y_true)
+    return corr
+
 
 # Evaluate a multitask model for accuracy.on SST only.
 def model_eval_sst(dataloader, model, device):
