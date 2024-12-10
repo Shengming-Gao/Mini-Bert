@@ -325,7 +325,7 @@ Semantic Textual Similarity correlation: 0.262 -> 0.374
 #
 #         print(f"[STS] Epoch {epoch}: train loss={train_loss:.3f}, dev pearson={dev_pearson:.3f}")
 
-def train_multitask_interleaved(args):
+def train_multitask(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
     # Load data
