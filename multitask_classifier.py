@@ -139,42 +139,224 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
-def train_multitask(args):
+# Todo:
+# currently we train the model sequentially on the three different tasks. During pretrain phase, the perforamce is good across all three tasks.
+# However, during finetune phase, we see improved perforamnce on paraphrase detection and semantic textual similarity, yet,
+# we observe a decrase in setiment classification accuracy. My guess is that the bert weights might choose to forget Sentiment classification
+# as it finishes Sentiment classification finetuning first.
+
+# the dataset is unevent. So, our adapted training will take that into account as well. Help me brainsotrm the potential adaption and analyze their pros and cons. C
+# Choose one or two of the best approach and help me to implement.
+"""
+In SST, train (8,544 examples) unique phrases are classified into 5 labels from negative to positive.
+In Quora dataset, train (141,506 examples)  questions pairs are labeled whether they are paraphrases. 
+In STS dataset, train (6,041 examples) sentence pairs are scored with their similarities from 0 to 5.
+"""
+
+"""
+Pretrain ( classifier head) -> Finetune (classifier head and Bert weights):
+Sentiment classification accuracy: 0.401 -> 0.349
+Paraphrase detection accuracy: 0.663 - > 0.777
+Semantic Textual Similarity correlation: 0.262 -> 0.374
+"""
+# def train_multitask(args):
+#     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+#
+#     # Load train and dev data for all tasks
+#     sst_train_raw, num_labels, para_train_raw, sts_train_raw = load_multitask_data(
+#         args.sst_train, args.para_train, args.sts_train, split='train')
+#     sst_dev_raw, _, para_dev_raw, sts_dev_raw = load_multitask_data(
+#         args.sst_dev, args.para_dev, args.sts_dev, split='train')
+#
+#     # Create datasets and dataloaders for SST (classification)
+#     sst_train_data = SentenceClassificationDataset(sst_train_raw, args)
+#     sst_dev_data = SentenceClassificationDataset(sst_dev_raw, args)
+#     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
+#                                       collate_fn=sst_train_data.collate_fn)
+#     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
+#                                     collate_fn=sst_dev_data.collate_fn)
+#
+#     # Create datasets and dataloaders for Paraphrase (binary classification)
+#     # Note: SentencePairDataset expects tuples: (sent1, sent2, label, id)
+#     # para_train_raw and para_dev_raw are already loaded by load_multitask_data
+#     para_train_data = SentencePairDataset(para_train_raw, args, isRegression=False)
+#     para_dev_data = SentencePairDataset(para_dev_raw, args, isRegression=False)
+#     para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
+#                                        collate_fn=para_train_data.collate_fn)
+#     para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+#                                      collate_fn=para_dev_data.collate_fn)
+#
+#     # Create datasets and dataloaders for STS (regression)
+#     sts_train_data = SentencePairDataset(sts_train_raw, args, isRegression=True)
+#     sts_dev_data = SentencePairDataset(sts_dev_raw, args, isRegression=True)
+#     sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
+#                                       collate_fn=sts_train_data.collate_fn)
+#     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
+#                                     collate_fn=sts_dev_data.collate_fn)
+#
+#     # Init model
+#     config = {
+#         'hidden_dropout_prob': args.hidden_dropout_prob,
+#         'num_labels': num_labels,
+#         'hidden_size': 768,
+#         'data_dir': '.',
+#         'option': args.option
+#     }
+#
+#     config = SimpleNamespace(**config)
+#
+#     model = MultitaskBERT(config)
+#     model = model.to(device)
+#
+#     optimizer = AdamW(model.parameters(), lr=args.lr)
+#
+#     # Training SST (Sentiment Classification)
+#     best_dev_acc = 0
+#     print("=== Training on SST (Sentiment) ===")
+#     for epoch in range(args.epochs):
+#         model.train()
+#         train_loss = 0
+#         num_batches = 0
+#         for batch in tqdm(sst_train_dataloader, desc=f'SST-train-{epoch}', disable=TQDM_DISABLE):
+#             b_ids, b_mask, b_labels = batch['token_ids'].to(device), batch['attention_mask'].to(device), batch['labels'].to(device)
+#
+#             optimizer.zero_grad()
+#             logits = model.predict_sentiment(b_ids, b_mask)
+#             loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+#
+#             loss.backward()
+#             optimizer.step()
+#
+#             train_loss += loss.item()
+#             num_batches += 1
+#
+#         train_loss = train_loss / num_batches
+#
+#         train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
+#         dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
+#
+#         if dev_acc > best_dev_acc:
+#             best_dev_acc = dev_acc
+#             save_model(model, optimizer, args, config, args.filepath)
+#
+#         print(f"[SST] Epoch {epoch}: train loss={train_loss:.3f}, train acc={train_acc:.3f}, dev acc={dev_acc:.3f}")
+#
+#     # Load the best SST model before moving to next tasks
+#     saved = torch.load(args.filepath)
+#     model.load_state_dict(saved['model'])
+#     model = model.to(device)
+#
+#     # Training Paraphrase (Binary Classification)
+#     # Use BCEWithLogitsLoss for binary classification
+#     best_para_acc = 0
+#     print("=== Training on Quora Paraphrase (Binary Classification) ===")
+#     bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
+#     for epoch in range(args.epochs):
+#         model.train()
+#         train_loss = 0
+#         num_batches = 0
+#         for batch in tqdm(para_train_dataloader, desc=f'Para-train-{epoch}', disable=TQDM_DISABLE):
+#             b1_ids = batch['token_ids_1'].to(device)
+#             b1_mask = batch['attention_mask_1'].to(device)
+#             b2_ids = batch['token_ids_2'].to(device)
+#             b2_mask = batch['attention_mask_2'].to(device)
+#             labels = batch['labels'].float().to(device)  # binary label 0 or 1
+#
+#             optimizer.zero_grad()
+#             logits = model.predict_paraphrase(b1_ids, b1_mask, b2_ids, b2_mask)
+#             loss = bce_loss_fn(logits, labels) / args.batch_size
+#
+#             loss.backward()
+#             optimizer.step()
+#
+#             train_loss += loss.item()
+#             num_batches += 1
+#
+#         train_loss = train_loss / num_batches
+#
+#         # Evaluate on the paraphrase dev set
+#         # Todo: reference to evaluation.py and modify the following line.
+#         dev_acc, dev_f1 = evaluate_paraphrase(para_dev_dataloader, model, device)
+#         if dev_acc > best_para_acc:
+#             best_para_acc = dev_acc
+#             save_model(model, optimizer, args, config, args.filepath)
+#
+#         print(f"[Para] Epoch {epoch}: train loss={train_loss:.3f}, dev acc={dev_acc:.3f}")
+#
+#     # Load the best Paraphrase model before moving on
+#     saved = torch.load(args.filepath)
+#     model.load_state_dict(saved['model'])
+#     model = model.to(device)
+#
+#     # Training STS (Regression)
+#     # Use MSELoss for regression
+#     best_sts_pearson = 0  # or any metric you want to track
+#     print("=== Training on STS (Regression) ===")
+#     mse_loss_fn = nn.MSELoss(reduction='sum')
+#     for epoch in range(args.epochs):
+#         model.train()
+#         train_loss = 0
+#         num_batches = 0
+#         for batch in tqdm(sts_train_dataloader, desc=f'STS-train-{epoch}', disable=TQDM_DISABLE):
+#             b1_ids = batch['token_ids_1'].to(device)
+#             b1_mask = batch['attention_mask_1'].to(device)
+#             b2_ids = batch['token_ids_2'].to(device)
+#             b2_mask = batch['attention_mask_2'].to(device)
+#             labels = batch['labels'].float().to(device) # similarity scores
+#
+#             optimizer.zero_grad()
+#             logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
+#             loss = mse_loss_fn(logits, labels) / args.batch_size
+#
+#             loss.backward()
+#             optimizer.step()
+#
+#             train_loss += loss.item()
+#             num_batches += 1
+#
+#         train_loss = train_loss / num_batches
+#
+#         # Evaluate on the STS dev set
+#         # Todo: reference to evaluation.py and modify the following line.
+#         dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
+#         if dev_pearson > best_sts_pearson:
+#             best_sts_pearson = dev_pearson
+#             save_model(model, optimizer, args, config, args.filepath)
+#
+#         print(f"[STS] Epoch {epoch}: train loss={train_loss:.3f}, dev pearson={dev_pearson:.3f}")
+
+def train_multitask_interleaved(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
-    # Load train and dev data for all tasks
+    # Load data
     sst_train_raw, num_labels, para_train_raw, sts_train_raw = load_multitask_data(
         args.sst_train, args.para_train, args.sts_train, split='train')
     sst_dev_raw, _, para_dev_raw, sts_dev_raw = load_multitask_data(
         args.sst_dev, args.para_dev, args.sts_dev, split='train')
 
-    # Create datasets and dataloaders for SST (classification)
+    # Create Datasets
     sst_train_data = SentenceClassificationDataset(sst_train_raw, args)
+    para_train_data = SentencePairDataset(para_train_raw, args, isRegression=False)
+    sts_train_data = SentencePairDataset(sts_train_raw, args, isRegression=True)
+
     sst_dev_data = SentenceClassificationDataset(sst_dev_raw, args)
+    para_dev_data = SentencePairDataset(para_dev_raw, args, isRegression=False)
+    sts_dev_data = SentencePairDataset(sts_dev_raw, args, isRegression=True)
+
     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
                                       collate_fn=sst_train_data.collate_fn)
-    sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
-                                    collate_fn=sst_dev_data.collate_fn)
-
-    # Create datasets and dataloaders for Paraphrase (binary classification)
-    # Note: SentencePairDataset expects tuples: (sent1, sent2, label, id)
-    # para_train_raw and para_dev_raw are already loaded by load_multitask_data
-    para_train_data = SentencePairDataset(para_train_raw, args, isRegression=False)
-    para_dev_data = SentencePairDataset(para_dev_raw, args, isRegression=False)
     para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
                                        collate_fn=para_train_data.collate_fn)
-    para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
-                                     collate_fn=para_dev_data.collate_fn)
-
-    # Create datasets and dataloaders for STS (regression)
-    sts_train_data = SentencePairDataset(sts_train_raw, args, isRegression=True)
-    sts_dev_data = SentencePairDataset(sts_dev_raw, args, isRegression=True)
     sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
                                       collate_fn=sts_train_data.collate_fn)
+
+    sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=sst_dev_data.collate_fn)
+    para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+                                     collate_fn=para_dev_data.collate_fn)
     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
 
-    # Init model
     config = {
         'hidden_dropout_prob': args.hidden_dropout_prob,
         'num_labels': num_labels,
@@ -182,111 +364,78 @@ def train_multitask(args):
         'data_dir': '.',
         'option': args.option
     }
-
     config = SimpleNamespace(**config)
-
-    model = MultitaskBERT(config)
-    model = model.to(device)
-
+    model = MultitaskBERT(config).to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    # Training SST (Sentiment Classification)
-    best_dev_acc = 0
-    print("=== Training on SST (Sentiment) ===")
-    for epoch in range(args.epochs):
-        model.train()
-        train_loss = 0
-        num_batches = 0
-        for batch in tqdm(sst_train_dataloader, desc=f'SST-train-{epoch}', disable=TQDM_DISABLE):
-            b_ids, b_mask, b_labels = batch['token_ids'].to(device), batch['attention_mask'].to(device), batch['labels'].to(device)
-
-            optimizer.zero_grad()
-            logits = model.predict_sentiment(b_ids, b_mask)
-            loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
-
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-            num_batches += 1
-
-        train_loss = train_loss / num_batches
-
-        train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
-
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
-            save_model(model, optimizer, args, config, args.filepath)
-
-        print(f"[SST] Epoch {epoch}: train loss={train_loss:.3f}, train acc={train_acc:.3f}, dev acc={dev_acc:.3f}")
-
-    # Load the best SST model before moving to next tasks
-    saved = torch.load(args.filepath)
-    model.load_state_dict(saved['model'])
-    model = model.to(device)
-
-    # Training Paraphrase (Binary Classification)
-    # Use BCEWithLogitsLoss for binary classification
-    best_para_acc = 0
-    print("=== Training on Quora Paraphrase (Binary Classification) ===")
     bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
-    for epoch in range(args.epochs):
-        model.train()
-        train_loss = 0
-        num_batches = 0
-        for batch in tqdm(para_train_dataloader, desc=f'Para-train-{epoch}', disable=TQDM_DISABLE):
-            b1_ids = batch['token_ids_1'].to(device)
-            b1_mask = batch['attention_mask_1'].to(device)
-            b2_ids = batch['token_ids_2'].to(device)
-            b2_mask = batch['attention_mask_2'].to(device)
-            labels = batch['labels'].float().to(device)  # binary label 0 or 1
-
-            optimizer.zero_grad()
-            logits = model.predict_paraphrase(b1_ids, b1_mask, b2_ids, b2_mask)
-            loss = bce_loss_fn(logits, labels) / args.batch_size
-
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-            num_batches += 1
-
-        train_loss = train_loss / num_batches
-
-        # Evaluate on the paraphrase dev set
-        # Todo: reference to evaluation.py and modify the following line.
-        dev_acc, dev_f1 = evaluate_paraphrase(para_dev_dataloader, model, device)
-        if dev_acc > best_para_acc:
-            best_para_acc = dev_acc
-            save_model(model, optimizer, args, config, args.filepath)
-
-        print(f"[Para] Epoch {epoch}: train loss={train_loss:.3f}, dev acc={dev_acc:.3f}")
-
-    # Load the best Paraphrase model before moving on
-    saved = torch.load(args.filepath)
-    model.load_state_dict(saved['model'])
-    model = model.to(device)
-
-    # Training STS (Regression)
-    # Use MSELoss for regression
-    best_sts_pearson = 0  # or any metric you want to track
-    print("=== Training on STS (Regression) ===")
     mse_loss_fn = nn.MSELoss(reduction='sum')
+
+    # Here, we assume we are in the finetune stage, or we can do both:
+    # We'll do multi-task training for a certain number of epochs:
+    best_sst_acc = 0
+    best_para_acc = 0
+    best_sts_pearson = 0
+
+    # Convert each dataloader to an iterator
+    sst_iter = iter(sst_train_dataloader)
+    para_iter = iter(para_train_dataloader)
+    sts_iter = iter(sts_train_dataloader)
+
+    num_steps = max(len(sst_train_dataloader), len(para_train_dataloader), len(sts_train_dataloader))
+    tasks = ['sst', 'para', 'sts']  # round robin order, can be randomized or weighted
+
     for epoch in range(args.epochs):
         model.train()
-        train_loss = 0
-        num_batches = 0
-        for batch in tqdm(sts_train_dataloader, desc=f'STS-train-{epoch}', disable=TQDM_DISABLE):
-            b1_ids = batch['token_ids_1'].to(device)
-            b1_mask = batch['attention_mask_1'].to(device)
-            b2_ids = batch['token_ids_2'].to(device)
-            b2_mask = batch['attention_mask_2'].to(device)
-            labels = batch['labels'].float().to(device) # similarity scores
+        # Re-create iterators every epoch (since DataLoader iterator is exhausted once)
+        sst_iter = iter(sst_train_dataloader)
+        para_iter = iter(para_train_dataloader)
+        sts_iter = iter(sts_train_dataloader)
 
-            optimizer.zero_grad()
-            logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
-            loss = mse_loss_fn(logits, labels) / args.batch_size
+        train_loss = 0.0
+        num_batches = 0
+
+        for step in range(num_steps * len(tasks)):
+            task = tasks[step % len(tasks)]
+            # Get a batch from the chosen task
+            if task == 'sst':
+                try:
+                    batch = next(sst_iter)
+                except StopIteration:
+                    # If we run out of sst batches, skip or break
+                    continue
+                b_ids, b_mask, b_labels = batch['token_ids'].to(device), batch['attention_mask'].to(device), batch['labels'].to(device)
+                optimizer.zero_grad()
+                logits = model.predict_sentiment(b_ids, b_mask)
+                loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+
+            elif task == 'para':
+                try:
+                    batch = next(para_iter)
+                except StopIteration:
+                    continue
+                b1_ids = batch['token_ids_1'].to(device)
+                b1_mask = batch['attention_mask_1'].to(device)
+                b2_ids = batch['token_ids_2'].to(device)
+                b2_mask = batch['attention_mask_2'].to(device)
+                labels = batch['labels'].float().to(device)
+                optimizer.zero_grad()
+                logits = model.predict_paraphrase(b1_ids, b1_mask, b2_ids, b2_mask)
+                loss = bce_loss_fn(logits, labels) / args.batch_size
+
+            else:  # sts
+                try:
+                    batch = next(sts_iter)
+                except StopIteration:
+                    continue
+                b1_ids = batch['token_ids_1'].to(device)
+                b1_mask = batch['attention_mask_1'].to(device)
+                b2_ids = batch['token_ids_2'].to(device)
+                b2_mask = batch['attention_mask_2'].to(device)
+                labels = batch['labels'].float().to(device)
+                optimizer.zero_grad()
+                logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
+                loss = mse_loss_fn(logits, labels) / args.batch_size
 
             loss.backward()
             optimizer.step()
@@ -294,16 +443,30 @@ def train_multitask(args):
             train_loss += loss.item()
             num_batches += 1
 
-        train_loss = train_loss / num_batches
+        train_loss = train_loss / (num_batches if num_batches > 0 else 1)
 
-        # Evaluate on the STS dev set
-        # Todo: reference to evaluation.py and modify the following line.
-        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
-        if dev_pearson > best_sts_pearson:
-            best_sts_pearson = dev_pearson
+        # Evaluate on all three tasks at the end of an epoch
+        sst_dev_acc, sst_dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
+        para_dev_acc, para_dev_f1 = evaluate_paraphrase(para_dev_dataloader, model, device)
+        sts_dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
+
+        # Check for best performance and save if needed
+        improved = False
+        if sst_dev_acc > best_sst_acc:
+            best_sst_acc = sst_dev_acc
+            improved = True
+        if para_dev_acc > best_para_acc:
+            best_para_acc = para_dev_acc
+            improved = True
+        if sts_dev_pearson > best_sts_pearson:
+            best_sts_pearson = sts_dev_pearson
+            improved = True
+
+        if improved:
             save_model(model, optimizer, args, config, args.filepath)
 
-        print(f"[STS] Epoch {epoch}: train loss={train_loss:.3f}, dev pearson={dev_pearson:.3f}")
+        print(f"Epoch {epoch}: train_loss={train_loss:.3f}, SST_dev_acc={sst_dev_acc:.3f}, Para_dev_acc={para_dev_acc:.3f}, STS_dev_pearson={sts_dev_pearson:.3f}")
+
 
 
 def test_model(args):
