@@ -64,12 +64,12 @@ class MultitaskBERT(nn.Module):
         self.similarity_regressor = nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
 
         # Initialize weights
-        # nn.init.xavier_uniform_(self.sentiment_classifier.weight)
-        # nn.init.zeros_(self.sentiment_classifier.bias)
-        # nn.init.xavier_uniform_(self.paraphrase_classifier.weight)
-        # nn.init.zeros_(self.paraphrase_classifier.bias)
-        # nn.init.xavier_uniform_(self.similarity_regressor.weight)
-        # nn.init.zeros_(self.similarity_regressor.bias)
+        nn.init.xavier_uniform_(self.sentiment_classifier.weight)
+        nn.init.zeros_(self.sentiment_classifier.bias)
+        nn.init.xavier_uniform_(self.paraphrase_classifier.weight)
+        nn.init.zeros_(self.paraphrase_classifier.bias)
+        nn.init.xavier_uniform_(self.similarity_regressor.weight)
+        nn.init.zeros_(self.similarity_regressor.bias)
 
     def forward(self, input_ids, attention_mask):
         'Takes a batch of sentences and produces embeddings for them.'
@@ -139,77 +139,6 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
-## Currently only trains on sst dataset
-## Todo: also train on para_train_data and sts_dev_data, do it sequentially.
-# def train_multitask(args):
-#     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-#     # Load data
-#     # Create the data and its corresponding datasets and dataloader
-#     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
-#     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
-#
-#     sst_train_data = SentenceClassificationDataset(sst_train_data, args)
-#     sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
-#
-#     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
-#                                       collate_fn=sst_train_data.collate_fn)
-#     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
-#                                     collate_fn=sst_dev_data.collate_fn)
-#
-#     # Todo: load para_train_data, sts_dev_data
-#
-#     # Init model
-#     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
-#               'num_labels': num_labels,
-#               'hidden_size': 768,
-#               'data_dir': '.',
-#               'option': args.option}
-#
-#     config = SimpleNamespace(**config)
-#
-#     model = MultitaskBERT(config)
-#     model = model.to(device)
-#
-#     lr = args.lr
-#     optimizer = AdamW(model.parameters(), lr=lr)
-#     best_dev_acc = 0
-#
-#     # Run for the specified number of epochs
-#     for epoch in range(args.epochs):
-#         model.train()
-#         train_loss = 0
-#         num_batches = 0
-#         for batch in tqdm(sst_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-#             b_ids, b_mask, b_labels = (batch['token_ids'],
-#                                        batch['attention_mask'], batch['labels'])
-#
-#             b_ids = b_ids.to(device)
-#             b_mask = b_mask.to(device)
-#             b_labels = b_labels.to(device)
-#
-#             optimizer.zero_grad()
-#             logits = model.predict_sentiment(b_ids, b_mask)
-#             loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
-#
-#             loss.backward()
-#             optimizer.step()
-#
-#             train_loss += loss.item()
-#             num_batches += 1
-#
-#         train_loss = train_loss / (num_batches)
-#
-#         train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
-#         dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
-#
-#         if dev_acc > best_dev_acc:
-#             best_dev_acc = dev_acc
-#             save_model(model, optimizer, args, config, args.filepath)
-#
-#         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-#
-#
-#
 def train_multitask(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
