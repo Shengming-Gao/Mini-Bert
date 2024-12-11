@@ -399,14 +399,19 @@ def finetune_multitask_interleaving(args, logger):
 def test_model(args):
     with torch.no_grad():
         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-        saved = torch.load(args.finetune_filepath)
+        # Load model from args.filepath instead of args.finetune_filepath
+        saved = torch.load(args.filepath, map_location=device)
         config = saved['model_config']
 
-        model = MultitaskBERT(config)
+        model = MultitaskBERT(config).to(device)
         model.load_state_dict(saved['model'])
-        model = model.to(device)
-        print(f"Loaded model to test from {args.finetune_filepath}")
 
+        # Set to evaluation mode - no weights will be updated
+        model.eval()
+
+        print(f"Loaded model to test from {args.filepath}")
+
+        # Run evaluation on dev/test sets without updating weights
         test_model_multitask(args, model, device)
 
 def get_args():
@@ -473,17 +478,25 @@ if __name__ == "__main__":
         def flush(self):
             self.log.flush()
 
+
     logger = Logger(args.log_file)
 
     if args.option == "pretrain":
-        # For pretrain, you might want a different lr (e.g., 1e-3)
-        # If you do, just set args.lr here:
-        # args.lr = 1e-3  # Uncomment if you want a different LR for pretrain specifically.
+        # Perform pretraining
         pretrain_multitask_sequential(args, logger)
 
+        # After pretraining is done, set args.filepath to the pretrain_filepath
+        # so that test_model knows which checkpoint to load.
+        args.filepath = args.pretrain_filepath
+        test_model(args)
+
     elif args.option == "finetune":
-        # For finetune, use the given args.lr
+        # Perform finetuning
         finetune_multitask_interleaving(args, logger)
+
+        # After finetuning is done, set args.filepath to the finetune_filepath
+        # so that test_model knows which checkpoint to load.
+        args.filepath = args.finetune_filepath
         test_model(args)
 
     logger.write("All done.\n")
