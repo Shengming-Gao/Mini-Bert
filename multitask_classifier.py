@@ -541,7 +541,7 @@ def test_model(args):
         config = saved['model_config']
 
         model = MultitaskBERT(config).to(device)
-        model.load_state_dict(saved['model'])
+        model.load_state_dict(saved['model'], strict=False)
 
         model.eval()
 
