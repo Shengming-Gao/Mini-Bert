@@ -305,7 +305,7 @@ def finetune_multitask_interleaving(args, logger):
 
     # Load pretrained model weights
     saved = torch.load(args.pretrain_filepath, map_location=device)
-    model.load_state_dict(saved['model'])
+    model.load_state_dict(saved['model'], strict=False)
     model = model.to(device)
 
     bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
