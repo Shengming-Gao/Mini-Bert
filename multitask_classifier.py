@@ -6,6 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.nn import CosineEmbeddingLoss
 
 from bert import BertModel
 from optimizer import AdamW
@@ -41,7 +42,7 @@ class MultitaskBERT(nn.Module):
         for param in self.bert.parameters():
             if config.option == 'pretrain':
                 param.requires_grad = False
-            elif config.option == 'finetune':
+            else:
                 param.requires_grad = True
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -155,6 +156,9 @@ def pretrain_multitask_sequential(args, logger):
     # Pretrain on SST
     logger.write("=== Pretraining on SST (Sentiment) ===\n")
     best_dev_acc = 0
+    bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
+    mse_loss_fn = nn.MSELoss(reduction='sum')
+
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -185,9 +189,8 @@ def pretrain_multitask_sequential(args, logger):
     model.load_state_dict(saved['model'])
     model = model.to(device)
 
-    # Pretrain on Paraphrase (heads only)
+    # Pretrain on Paraphrase
     logger.write("=== Pretraining on Quora Paraphrase ===\n")
-    bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
     best_para_acc = 0
     for epoch in range(args.epochs):
         model.train()
@@ -221,9 +224,8 @@ def pretrain_multitask_sequential(args, logger):
     model.load_state_dict(saved['model'])
     model = model.to(device)
 
-    # Pretrain on STS (heads only)
+    # Pretrain on STS
     logger.write("=== Pretraining on STS (Regression) ===\n")
-    mse_loss_fn = nn.MSELoss(reduction='sum')
     best_sts_pearson = 0
     for epoch in range(args.epochs):
         model.train()
@@ -254,156 +256,13 @@ def pretrain_multitask_sequential(args, logger):
 
     logger.write("Pretraining finished.\n")
 
-
-# def finetune_multitask_interleaving(args, logger):
-#     """
-#     Finetune stage (BERT and heads) done interleavingly:
-#     """
-#     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-#
-#     # Load data
-#     sst_train_raw, num_labels, para_train_raw, sts_train_raw = load_multitask_data(
-#         args.sst_train, args.para_train, args.sts_train, split='train')
-#     sst_dev_raw, _, para_dev_raw, sts_dev_raw = load_multitask_data(
-#         args.sst_dev, args.para_dev, args.sts_dev, split='train')
-#
-#     sst_train_data = SentenceClassificationDataset(sst_train_raw, args)
-#     para_train_data = SentencePairDataset(para_train_raw, args, isRegression=False)
-#     sts_train_data = SentencePairDataset(sts_train_raw, args, isRegression=True)
-#
-#     sst_dev_data = SentenceClassificationDataset(sst_dev_raw, args)
-#     para_dev_data = SentencePairDataset(para_dev_raw, args, isRegression=False)
-#     sts_dev_data = SentencePairDataset(sts_dev_raw, args, isRegression=True)
-#
-#     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
-#                                       collate_fn=sst_train_data.collate_fn)
-#     para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
-#                                        collate_fn=para_train_data.collate_fn)
-#     sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
-#                                       collate_fn=sts_train_data.collate_fn)
-#
-#     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
-#                                     collate_fn=sst_dev_data.collate_fn)
-#     para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
-#                                      collate_fn=para_dev_data.collate_fn)
-#     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
-#                                     collate_fn=sts_dev_data.collate_fn)
-#
-#     finetune_config = {
-#         'hidden_dropout_prob': args.hidden_dropout_prob,
-#         'num_labels': num_labels,
-#         'hidden_size': 768,
-#         'data_dir': '.',
-#         'option': 'finetune'
-#     }
-#     finetune_config = SimpleNamespace(**finetune_config)
-#     model = MultitaskBERT(finetune_config).to(device)
-#     optimizer = AdamW(model.parameters(), lr=args.lr)
-#
-#     # Load pretrained model weights
-#     saved = torch.load(args.pretrain_filepath)
-#     model.load_state_dict(saved['model'])
-#     model = model.to(device)
-#
-#     bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
-#     mse_loss_fn = nn.MSELoss(reduction='sum')
-#
-#     best_sst_acc = 0
-#     best_para_acc = 0
-#     best_sts_pearson = 0
-#
-#     sst_iter = iter(sst_train_dataloader)
-#     para_iter = iter(para_train_dataloader)
-#     sts_iter = iter(sts_train_dataloader)
-#
-#     num_steps = max(len(sst_train_dataloader), len(para_train_dataloader), len(sts_train_dataloader))
-#     tasks = ['sst', 'para', 'sts']  # round robin
-#
-#     logger.write("=== Finetuning Interleavingly ===\n")
-#     for epoch in range(args.epochs):
-#         model.train()
-#         sst_iter = iter(sst_train_dataloader)
-#         para_iter = iter(para_train_dataloader)
-#         sts_iter = iter(sts_train_dataloader)
-#
-#         train_loss = 0.0
-#         num_batches = 0
-#         for step in range(num_steps * len(tasks)):
-#             task = tasks[step % len(tasks)]
-#             if task == 'sst':
-#                 try:
-#                     batch = next(sst_iter)
-#                 except StopIteration:
-#                     continue
-#                 b_ids, b_mask, b_labels = batch['token_ids'].to(device), batch['attention_mask'].to(device), batch['labels'].to(device)
-#                 optimizer.zero_grad()
-#                 logits = model.predict_sentiment(b_ids, b_mask)
-#                 loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
-#
-#             elif task == 'para':
-#                 try:
-#                     batch = next(para_iter)
-#                 except StopIteration:
-#                     continue
-#                 b1_ids = batch['token_ids_1'].to(device)
-#                 b1_mask = batch['attention_mask_1'].to(device)
-#                 b2_ids = batch['token_ids_2'].to(device)
-#                 b2_mask = batch['attention_mask_2'].to(device)
-#                 labels = batch['labels'].float().to(device)
-#                 optimizer.zero_grad()
-#                 logits = model.predict_paraphrase(b1_ids, b1_mask, b2_ids, b2_mask)
-#                 loss = bce_loss_fn(logits, labels) / args.batch_size
-#
-#             else:  # sts
-#                 try:
-#                     batch = next(sts_iter)
-#                 except StopIteration:
-#                     continue
-#                 b1_ids = batch['token_ids_1'].to(device)
-#                 b1_mask = batch['attention_mask_1'].to(device)
-#                 b2_ids = batch['token_ids_2'].to(device)
-#                 b2_mask = batch['attention_mask_2'].to(device)
-#                 labels = batch['labels'].float().to(device)
-#                 optimizer.zero_grad()
-#                 logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
-#                 loss = mse_loss_fn(logits, labels) / args.batch_size
-#
-#             loss.backward()
-#             optimizer.step()
-#             train_loss += loss.item()
-#             num_batches += 1
-#
-#         train_loss = train_loss / (num_batches if num_batches > 0 else 1)
-#         sst_dev_acc, _, *_ = model_eval_sst(sst_dev_dataloader, model, device)
-#         para_dev_acc, _ = evaluate_paraphrase(para_dev_dataloader, model, device)
-#         sts_dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
-#
-#         improved = False
-#         if sst_dev_acc > best_sst_acc:
-#             best_sst_acc = sst_dev_acc
-#             improved = True
-#         if para_dev_acc > best_para_acc:
-#             best_para_acc = para_dev_acc
-#             improved = True
-#         if sts_dev_pearson > best_sts_pearson:
-#             best_sts_pearson = sts_dev_pearson
-#             improved = True
-#
-#         if improved:
-#             save_model(model, optimizer, args, finetune_config, args.finetune_filepath)
-#
-#         logger.write(f"[Finetune] Epoch {epoch}: train_loss={train_loss:.3f}, SST_dev_acc={sst_dev_acc:.3f}, Para_dev_acc={para_dev_acc:.3f}, STS_dev_pearson={sts_dev_pearson:.3f}\n")
-#
-#     logger.write("Finetuning finished.\n")
+    # Test model after pretraining
+    args.filepath = args.pretrain_filepath
+    test_model(args)
 
 def finetune_multitask_interleaving(args, logger):
     """
-    Finetune stage (BERT and heads) done interleavingly with Gradient Surgery:
-    We will:
-    - Sample batches from each task (SST, Para, STS)
-    - Compute losses and gradients separately
-    - Apply Gradient Surgery to handle conflicting gradients
-    - Then perform an optimizer step
+    Finetune stage (BERT and heads) done interleavingly with Gradient Surgery
     """
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -476,7 +335,6 @@ def finetune_multitask_interleaving(args, logger):
         num_batches = 0
 
         for step in range(num_steps):
-            # Fetch one batch per task if available
             tasks = []
             if step < len(sst_train_dataloader):
                 tasks.append('sst')
@@ -489,20 +347,10 @@ def finetune_multitask_interleaving(args, logger):
                 break
 
             optimizer.zero_grad()
-
-            # We will store gradients separately for each task
-            # Strategy:
-            # 1. Forward & backward for each task separately
-            # 2. Store gradients
-            # 3. Apply gradient surgery
-            # 4. Finally do an optimizer step
-
-            # Create a dict to store parameter gradients per task
             named_params = {name: p for name, p in model.named_parameters() if p.requires_grad}
             grads_per_task = {}
 
             for task in tasks:
-                # Zero out gradients before each backward
                 model.zero_grad(set_to_none=True)
 
                 if task == 'sst':
@@ -538,8 +386,7 @@ def finetune_multitask_interleaving(args, logger):
                     logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
                     loss = mse_loss_fn(logits, labels) / args.batch_size
 
-                loss.backward(retain_graph=True)  # Retain graph in case we need multiple tasks
-                # Store gradients
+                loss.backward(retain_graph=True)
                 grads = {}
                 for name, p in named_params.items():
                     if p.grad is not None:
@@ -551,16 +398,13 @@ def finetune_multitask_interleaving(args, logger):
                 train_loss += loss.item()
                 num_batches += 1
 
-            # Now apply Gradient Surgery
-            # For simplicity, we do pairwise gradient surgery among tasks (if you have 3 tasks).
-            # Check for conflicts and fix them:
+            # Gradient Surgery
             def dot_product(g1, g2):
                 return sum((g1[name] * g2[name]).sum() for name in g1)
 
             def norm_square(g):
                 return sum((g[name]**2).sum() for name in g)
 
-            # If we have multiple tasks, check conflicts pairwise
             task_list = list(grads_per_task.keys())
             for i in range(len(task_list)):
                 for j in range(i+1, len(task_list)):
@@ -571,28 +415,21 @@ def finetune_multitask_interleaving(args, logger):
 
                     dp = dot_product(g1, g2)
                     if dp < 0:
-                        # Project g1 onto the normal plane of g2
                         g2_norm_sq = norm_square(g2)
                         coeff = dp / g2_norm_sq
-                        # g1 <- g1 - coeff * g2
                         for name in g1:
                             g1[name] = g1[name] - coeff * g2[name]
-
                         grads_per_task[t1] = g1
 
-            # Combine all task gradients by summation after fixing conflicts
-            # (Alternatively, you might want some weighting)
             final_grads = {name: torch.zeros_like(p) for name, p in named_params.items()}
             for t in grads_per_task:
                 for name in final_grads:
                     final_grads[name] += grads_per_task[t][name]
 
-            # Set model gradients to these final combined gradients
             model.zero_grad(set_to_none=True)
             for name, p in named_params.items():
                 p.grad = final_grads[name]
 
-            # Update model parameters
             optimizer.step()
 
         train_loss = train_loss / (num_batches if num_batches > 0 else 1)
@@ -618,18 +455,94 @@ def finetune_multitask_interleaving(args, logger):
 
     logger.write("Finetuning with Gradient Surgery finished.\n")
 
+    # Test model after finetuning
+    args.filepath = args.finetune_filepath
+    test_model(args)
+
+def cosine_similarity_finetune(args, logger):
+    """
+    Fine-tune model using Cosine Embedding Loss on the STS dataset for better embedding alignment.
+    """
+    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+
+    # Load the fine-tuned model (after normal finetuning)
+    saved = torch.load(args.finetune_filepath, map_location=device)
+    config = saved['model_config']
+    model = MultitaskBERT(config).to(device)
+    model.load_state_dict(saved['model'])
+    model.train()
+
+    optimizer = AdamW(model.parameters(), lr=args.lr)
+
+    # Load STS data again for cosine fine-tuning
+    _, _, _, sts_train_raw = load_multitask_data(
+        args.sst_train, args.para_train, args.sts_train, split='train')
+    _, _, _, sts_dev_raw = load_multitask_data(
+        args.sst_dev, args.para_dev, args.sts_dev, split='train')
+
+    sts_train_data = SentencePairDataset(sts_train_raw, args, isRegression=True)
+    sts_dev_data = SentencePairDataset(sts_dev_raw, args, isRegression=True)
+
+    sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=sts_train_data.collate_fn)
+    sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=sts_dev_data.collate_fn)
+
+    cos_loss_fn = CosineEmbeddingLoss(margin=0.0, reduction='sum')
+
+    best_dev_pearson = 0
+    cos_epochs = 5
+    logger.write("=== Cosine Similarity Fine-Tuning on STS ===\n")
+    for epoch in range(cos_epochs):
+        model.train()
+        train_loss = 0.0
+        num_batches = 0
+        for batch in sts_train_dataloader:
+            b1_ids = batch['token_ids_1'].to(device)
+            b1_mask = batch['attention_mask_1'].to(device)
+            b2_ids = batch['token_ids_2'].to(device)
+            b2_mask = batch['attention_mask_2'].to(device)
+            labels = batch['labels'].float().to(device)
+
+            # Convert continuous STS scores to binary targets for cosine loss
+            cos_targets = torch.where(labels >= 2.5, torch.ones_like(labels), -1*torch.ones_like(labels))
+
+            optimizer.zero_grad()
+            emb1 = model.forward(b1_ids, b1_mask)
+            emb2 = model.forward(b2_ids, b2_mask)
+
+            loss = cos_loss_fn(emb1, emb2, cos_targets) / args.batch_size
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            num_batches += 1
+
+        train_loss = train_loss / (num_batches if num_batches > 0 else 1)
+        # Evaluate using original STS evaluation
+        model.eval()
+        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
+
+        if dev_pearson > best_dev_pearson:
+            best_dev_pearson = dev_pearson
+            save_model(model, optimizer, args, config, "cosine_finetune_best.pt")
+
+        logger.write(f"[Cosine-Finetune] Epoch {epoch}: train_loss={train_loss:.3f}, dev_pearson={dev_pearson:.3f}\n")
+
+    logger.write("Cosine Similarity Fine-Tuning finished.\n")
+
+    # Test model after cosine fine-tuning
+    args.filepath = "cosine_finetune_best.pt"
+    test_model(args)
 
 def test_model(args):
     with torch.no_grad():
         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-        # Load model from args.filepath instead of args.finetune_filepath
         saved = torch.load(args.filepath, map_location=device)
         config = saved['model_config']
 
         model = MultitaskBERT(config).to(device)
         model.load_state_dict(saved['model'])
-
-        # Set to evaluation mode - no weights will be updated
         model.eval()
 
         print(f"Loaded model to test from {args.filepath}")
@@ -655,10 +568,9 @@ def get_args():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--use_gpu", action='store_true')
 
-    parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
-    parser.add_argument("--lr", type=float, help="learning rate, default lr for 'pretrain': 1e-3, 'finetune': 1e-5",
-                        default=1e-5)
+    parser.add_argument("--lr", type=float, default=1e-5)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     parser.add_argument("--pretrain_filepath", type=str, default=f'pretrain-{{epochs}}-{{lr}}-multitask-{timestamp}.pt')
@@ -676,8 +588,8 @@ def get_args():
     parser.add_argument("--log_file", type=str, default=f'log-{timestamp}.txt')
 
     parser.add_argument("--option", type=str,
-                        help='pretrain: freeze BERT and train heads; finetune: train BERT + heads',
-                        choices=('pretrain','finetune'), default="pretrain")
+                        help='pretrain: freeze BERT and train heads; finetune: train BERT+heads; cosine_finetune: fine-tune embeddings with Cosine Loss',
+                        choices=('pretrain','finetune','cosine_finetune'), default="pretrain")
 
     args = parser.parse_args()
     args.pretrain_filepath = args.pretrain_filepath.format(epochs=args.epochs, lr=args.lr)
@@ -701,26 +613,19 @@ if __name__ == "__main__":
         def flush(self):
             self.log.flush()
 
-
     logger = Logger(args.log_file)
 
     if args.option == "pretrain":
         # Perform pretraining
         pretrain_multitask_sequential(args, logger)
 
-        # After pretraining is done, set args.filepath to the pretrain_filepath
-        # so that test_model knows which checkpoint to load.
-        args.filepath = args.pretrain_filepath
-        test_model(args)
-
     elif args.option == "finetune":
         # Perform finetuning
         finetune_multitask_interleaving(args, logger)
 
-        # After finetuning is done, set args.filepath to the finetune_filepath
-        # so that test_model knows which checkpoint to load.
-        args.filepath = args.finetune_filepath
-        test_model(args)
+    elif args.option == "cosine_finetune":
+        # Perform cosine similarity fine-tuning
+        cosine_similarity_finetune(args, logger)
 
     logger.write("All done.\n")
     logger.log.close()
