@@ -472,7 +472,7 @@ def cosine_similarity_finetune(args, logger):
     saved = torch.load(args.finetune_filepath, map_location=device)
     config = saved['model_config']
     model = MultitaskBERT(config).to(device)
-    model.load_state_dict(saved['model'])
+    model.load_state_dict(saved['model'], strict=False)
     model.train()
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
