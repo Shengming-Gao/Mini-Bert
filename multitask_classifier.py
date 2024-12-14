@@ -53,16 +53,13 @@ class MultitaskBERT(nn.Module):
         # Paraphrase detection layer
         self.paraphrase_classifier = nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
 
-        # Semantic similarity layer
-        self.similarity_regressor = nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
+        # We remove the similarity_regressor. We will predict STS by cosine similarity directly.
 
         # Initialize weights
         nn.init.xavier_uniform_(self.sentiment_classifier.weight)
         nn.init.zeros_(self.sentiment_classifier.bias)
         nn.init.xavier_uniform_(self.paraphrase_classifier.weight)
         nn.init.zeros_(self.paraphrase_classifier.bias)
-        nn.init.xavier_uniform_(self.similarity_regressor.weight)
-        nn.init.zeros_(self.similarity_regressor.bias)
 
     def forward(self, input_ids, attention_mask):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
@@ -84,12 +81,12 @@ class MultitaskBERT(nn.Module):
         return logits
 
     def predict_similarity(self, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2):
+        # Directly compute cosine similarity
         pooled_output_1 = self.forward(input_ids_1, attention_mask_1)
         pooled_output_2 = self.forward(input_ids_2, attention_mask_2)
-        combined_output = torch.cat((pooled_output_1, pooled_output_2), dim=1)
-        combined_output = self.dropout(combined_output)
-        logits = self.similarity_regressor(combined_output).squeeze(-1)
-        return logits
+        # This returns a value in [-1,1]
+        cos_sim = F.cosine_similarity(pooled_output_1, pooled_output_2, dim=1)
+        return cos_sim
 
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
@@ -109,7 +106,7 @@ def pretrain_multitask_sequential(args, logger):
     Pretrain stage (heads only, BERT frozen) done sequentially:
     1. Pretrain on SST
     2. Pretrain on Paraphrase
-    3. Pretrain on STS
+    3. Pretrain on STS (using cosine similarity but still heads frozen - we won't use linear head for STS)
     """
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -153,12 +150,8 @@ def pretrain_multitask_sequential(args, logger):
     model = MultitaskBERT(pretrain_config).to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    # Pretrain on SST
     logger.write("=== Pretraining on SST (Sentiment) ===\n")
     best_dev_acc = 0
-    bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
-    mse_loss_fn = nn.MSELoss(reduction='sum')
-
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -189,8 +182,8 @@ def pretrain_multitask_sequential(args, logger):
     model.load_state_dict(saved['model'])
     model = model.to(device)
 
-    # Pretrain on Paraphrase
     logger.write("=== Pretraining on Quora Paraphrase ===\n")
+    bce_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
     best_para_acc = 0
     for epoch in range(args.epochs):
         model.train()
@@ -219,13 +212,13 @@ def pretrain_multitask_sequential(args, logger):
 
         logger.write(f"[Para-pretrain] Epoch {epoch}: train_loss={train_loss:.3f}, dev_acc={dev_acc:.3f}\n")
 
-    # Load the best model so far (with SST and Paraphrase heads)
+    # Load the best model so far
     saved = torch.load(args.pretrain_filepath)
     model.load_state_dict(saved['model'])
     model = model.to(device)
 
-    # Pretrain on STS
-    logger.write("=== Pretraining on STS (Regression) ===\n")
+    logger.write("=== Pretraining on STS (Regression, now with cosine) ===\n")
+    mse_loss_fn = nn.MSELoss(reduction='sum')
     best_sts_pearson = 0
     for epoch in range(args.epochs):
         model.train()
@@ -237,9 +230,12 @@ def pretrain_multitask_sequential(args, logger):
             b2_ids = batch['token_ids_2'].to(device)
             b2_mask = batch['attention_mask_2'].to(device)
             labels = batch['labels'].float().to(device)
+            # Scale labels [0,5] to [-1,1]
+            labels_norm = 2.0 * (labels / 5.0) - 1.0
+
             optimizer.zero_grad()
-            logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
-            loss = mse_loss_fn(logits, labels) / args.batch_size
+            cos_sim = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
+            loss = mse_loss_fn(cos_sim, labels_norm) / args.batch_size
             loss.backward()
             optimizer.step()
 
@@ -247,7 +243,9 @@ def pretrain_multitask_sequential(args, logger):
             num_batches += 1
 
         train_loss /= num_batches
-        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
+        # Evaluate STS
+        # evaluate_sts expects predictions in [0,5]. We'll scale predictions in evaluate_sts.
+        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device, sts_scale_back=True)
         if dev_pearson > best_sts_pearson:
             best_sts_pearson = dev_pearson
             save_model(model, optimizer, args, pretrain_config, args.pretrain_filepath)
@@ -256,13 +254,13 @@ def pretrain_multitask_sequential(args, logger):
 
     logger.write("Pretraining finished.\n")
 
-    # Test model after pretraining
+    # Test after pretraining
     args.filepath = args.pretrain_filepath
     test_model(args)
 
 def finetune_multitask_interleaving(args, logger):
     """
-    Finetune stage (BERT and heads) done interleavingly with Gradient Surgery
+    Finetune stage (BERT and heads) done interleavingly with Gradient Surgery and using cosine for STS.
     """
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -326,7 +324,6 @@ def finetune_multitask_interleaving(args, logger):
     logger.write("=== Finetuning Interleavingly with Gradient Surgery ===\n")
     for epoch in range(args.epochs):
         model.train()
-        # Re-initialize iterators each epoch
         sst_iter = iter(sst_train_dataloader)
         para_iter = iter(para_train_dataloader)
         sts_iter = iter(sts_train_dataloader)
@@ -349,6 +346,7 @@ def finetune_multitask_interleaving(args, logger):
             optimizer.zero_grad()
             named_params = {name: p for name, p in model.named_parameters() if p.requires_grad}
             grads_per_task = {}
+            loss_per_task = {}
 
             for task in tasks:
                 model.zero_grad(set_to_none=True)
@@ -360,7 +358,7 @@ def finetune_multitask_interleaving(args, logger):
                         continue
                     b_ids, b_mask, b_labels = batch['token_ids'].to(device), batch['attention_mask'].to(device), batch['labels'].to(device)
                     logits = model.predict_sentiment(b_ids, b_mask)
-                    loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+                    loss_task = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
                 elif task == 'para':
                     try:
                         batch = next(para_iter)
@@ -372,7 +370,7 @@ def finetune_multitask_interleaving(args, logger):
                     b2_mask = batch['attention_mask_2'].to(device)
                     labels = batch['labels'].float().to(device)
                     logits = model.predict_paraphrase(b1_ids, b1_mask, b2_ids, b2_mask)
-                    loss = bce_loss_fn(logits, labels) / args.batch_size
+                    loss_task = bce_loss_fn(logits, labels) / args.batch_size
                 else:  # sts
                     try:
                         batch = next(sts_iter)
@@ -383,10 +381,12 @@ def finetune_multitask_interleaving(args, logger):
                     b2_ids = batch['token_ids_2'].to(device)
                     b2_mask = batch['attention_mask_2'].to(device)
                     labels = batch['labels'].float().to(device)
-                    logits = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
-                    loss = mse_loss_fn(logits, labels) / args.batch_size
+                    # Scale STS labels [0,5] to [-1,1]
+                    labels_norm = 2.0 * (labels / 5.0) - 1.0
+                    cos_sim = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
+                    loss_task = mse_loss_fn(cos_sim, labels_norm) / args.batch_size
 
-                loss.backward(retain_graph=True)
+                loss_task.backward(retain_graph=True)
                 grads = {}
                 for name, p in named_params.items():
                     if p.grad is not None:
@@ -394,9 +394,7 @@ def finetune_multitask_interleaving(args, logger):
                     else:
                         grads[name] = torch.zeros_like(p)
                 grads_per_task[task] = grads
-
-                train_loss += loss.item()
-                num_batches += 1
+                loss_per_task[task] = loss_task.item()
 
             # Gradient Surgery
             def dot_product(g1, g2):
@@ -432,10 +430,15 @@ def finetune_multitask_interleaving(args, logger):
 
             optimizer.step()
 
+            batch_loss = sum(loss_per_task.values()) / len(loss_per_task)
+            train_loss += batch_loss
+            num_batches += 1
+
         train_loss = train_loss / (num_batches if num_batches > 0 else 1)
         sst_dev_acc, _, *_ = model_eval_sst(sst_dev_dataloader, model, device)
         para_dev_acc, _ = evaluate_paraphrase(para_dev_dataloader, model, device)
-        sts_dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
+        # Evaluate STS with scaling predictions back to [0,5]
+        sts_dev_pearson = evaluate_sts(sts_dev_dataloader, model, device, sts_scale_back=True)
 
         improved = False
         if sst_dev_acc > best_sst_acc:
@@ -453,15 +456,15 @@ def finetune_multitask_interleaving(args, logger):
 
         logger.write(f"[Finetune w/ GS] Epoch {epoch}: train_loss={train_loss:.3f}, SST_dev_acc={sst_dev_acc:.3f}, Para_dev_acc={para_dev_acc:.3f}, STS_dev_pearson={sts_dev_pearson:.3f}\n")
 
-    logger.write("Finetuning with Gradient Surgery finished.\n")
+    logger.write("Finetuning finished.\n")
 
-    # Test model after finetuning
+    # Test after finetuning
     args.filepath = args.finetune_filepath
     test_model(args)
 
 def cosine_similarity_finetune(args, logger):
     """
-    Fine-tune model using Cosine Embedding Loss on the STS dataset for better embedding alignment.
+    Fine-tune on STS using CosineEmbeddingLoss or directly MSE with cosine similarity again.
     """
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
@@ -488,7 +491,7 @@ def cosine_similarity_finetune(args, logger):
     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
 
-    cos_loss_fn = CosineEmbeddingLoss(margin=0.0, reduction='sum')
+    mse_loss_fn = nn.MSELoss(reduction='sum')
 
     best_dev_pearson = 0
     cos_epochs = 5
@@ -503,15 +506,12 @@ def cosine_similarity_finetune(args, logger):
             b2_ids = batch['token_ids_2'].to(device)
             b2_mask = batch['attention_mask_2'].to(device)
             labels = batch['labels'].float().to(device)
-
-            # Convert continuous STS scores to binary targets for cosine loss
-            cos_targets = torch.where(labels >= 2.5, torch.ones_like(labels), -1*torch.ones_like(labels))
+            # Scale [0,5] -> [-1,1]
+            labels_norm = 2.0*(labels/5.0)-1.0
 
             optimizer.zero_grad()
-            emb1 = model.forward(b1_ids, b1_mask)
-            emb2 = model.forward(b2_ids, b2_mask)
-
-            loss = cos_loss_fn(emb1, emb2, cos_targets) / args.batch_size
+            cos_sim = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask)
+            loss = mse_loss_fn(cos_sim, labels_norm) / args.batch_size
             loss.backward()
             optimizer.step()
 
@@ -519,10 +519,8 @@ def cosine_similarity_finetune(args, logger):
             num_batches += 1
 
         train_loss = train_loss / (num_batches if num_batches > 0 else 1)
-        # Evaluate using original STS evaluation
         model.eval()
-        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device)
-
+        dev_pearson = evaluate_sts(sts_dev_dataloader, model, device, sts_scale_back=True)
         if dev_pearson > best_dev_pearson:
             best_dev_pearson = dev_pearson
             save_model(model, optimizer, args, config, "cosine_finetune_best.pt")
@@ -531,18 +529,20 @@ def cosine_similarity_finetune(args, logger):
 
     logger.write("Cosine Similarity Fine-Tuning finished.\n")
 
-    # Test model after cosine fine-tuning
+    # Test after cosine fine-tuning
     args.filepath = "cosine_finetune_best.pt"
     test_model(args)
 
 def test_model(args):
     with torch.no_grad():
         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+        # Load model from args.filepath instead of args.finetune_filepath
         saved = torch.load(args.filepath, map_location=device)
         config = saved['model_config']
 
         model = MultitaskBERT(config).to(device)
         model.load_state_dict(saved['model'])
+
         model.eval()
 
         print(f"Loaded model to test from {args.filepath}")
@@ -596,6 +596,35 @@ def get_args():
     args.finetune_filepath = args.finetune_filepath.format(epochs=args.epochs, lr=args.lr)
     return args
 
+# Modify evaluate_sts to handle sts_scale_back argument
+# We assume you can modify evaluation.py or define a wrapper here.
+# If evaluate_sts doesn't have sts_scale_back, we wrap it here:
+
+def evaluate_sts(dataloader, model, device, sts_scale_back=False):
+    model.eval()
+    preds = []
+    gold = []
+    with torch.no_grad():
+        for batch in dataloader:
+            b1_ids = batch['token_ids_1'].to(device)
+            b1_mask = batch['attention_mask_1'].to(device)
+            b2_ids = batch['token_ids_2'].to(device)
+            b2_mask = batch['attention_mask_2'].to(device)
+            labels = batch['labels'].float().cpu().numpy()
+            cos_sim = model.predict_similarity(b1_ids, b1_mask, b2_ids, b2_mask).cpu().numpy()
+            if sts_scale_back:
+                # scale [-1,1] back to [0,5]
+                cos_sim = (cos_sim + 1.0)*2.5
+
+            preds.extend(cos_sim.tolist())
+            gold.extend(labels.tolist())
+
+    # Compute Pearson correlation
+    # Assuming you have a Pearson correlation function in evaluation.py
+    from scipy.stats import pearsonr
+    pearson, _ = pearsonr(preds, gold)
+    return pearson
+
 if __name__ == "__main__":
     args = get_args()
     seed_everything(args.seed)
@@ -616,15 +645,12 @@ if __name__ == "__main__":
     logger = Logger(args.log_file)
 
     if args.option == "pretrain":
-        # Perform pretraining
         pretrain_multitask_sequential(args, logger)
 
     elif args.option == "finetune":
-        # Perform finetuning
         finetune_multitask_interleaving(args, logger)
 
     elif args.option == "cosine_finetune":
-        # Perform cosine similarity fine-tuning
         cosine_similarity_finetune(args, logger)
 
     logger.write("All done.\n")
